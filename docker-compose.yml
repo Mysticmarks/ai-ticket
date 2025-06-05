@@ -4,6 +4,7 @@ services:
     image: ai_ticket
     build:
       context: .
+    restart: unless-stopped
     # Optional: Add environment variables for KOBOLDCPP_API_URL if needed here
     # environment:
     #   - KOBOLDCPP_API_URL=http://host.docker.internal:5001/api

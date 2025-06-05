@@ -56,12 +56,13 @@ def on_event(event_data: dict):
         return {"error": "Could not extract a valid prompt from 'content'."}
 
     print(f"Extracted prompt: '{prompt_text}'")
-    
-    completion = get_kobold_completion(prompt=prompt_text)
 
-    if completion:
-        print(f"KoboldCPP completion: {completion}")
-        return {"completion": completion}
+    result = get_kobold_completion(prompt=prompt_text)
+
+    if "completion" in result:
+        print(f"KoboldCPP completion: {result['completion']}")
+        return {"completion": result['completion']}
     else:
-        print("Failed to get completion from KoboldCPP.")
-        return {"error": "Failed to get completion from KoboldCPP."}
+        # Error already printed by get_kobold_completion
+        print(f"Failed to get completion from KoboldCPP. Error: {result.get('error')}")
+        return {"error": result.get("error", "Failed to get completion from KoboldCPP.")}
