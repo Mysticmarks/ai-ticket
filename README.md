@@ -33,8 +33,8 @@ The system consists of several key components:
 *   **Submodules**: The project uses Git submodules to include external repositories. While some, like `vendor/Auto-GPT` and `vendor/lollms`, were part of a previous architecture, they are not actively used by the current core application. The relevant ones for general utility or potential future integrations might include:
     *   `vendor/Auto-GPT-Benchmarks`
     *   `vendor/Auto-GPT-Plugin-Template`
+    *   `vendor/lollms`
     *   `vendor/openai-python`
-    (Note: A full cleanup of unused submodules can be done separately if desired.)
 
 ## Prerequisites
 
@@ -106,12 +106,15 @@ To see logs:
 docker-compose logs -f ai_ticket
 ```
 
-To stop the service:
+To stop the services:
 ```bash
 docker-compose down
 ```
 
+
 The `ai_ticket` service will process events sent to it (the mechanism for sending events, e.g. HTTP endpoint, would need to be defined or is part of how the Docker image's `ENTRYPOINT` or `CMD` is configured). It then queries the configured KoboldCPP backend.
+=======
+The `autogpt` service is configured to run with specific goals related to introspection. The `mockopenai` service exposes a port (5000) which might be used by Auto-GPT.
 
 ## Running Tests
 
@@ -233,6 +236,7 @@ elif "error" in response:
 ```
 
 The `find_name` utility can still be used independently:
+
 ```python
 from ai_ticket import find_name
 
