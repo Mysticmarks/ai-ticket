@@ -1,24 +1,41 @@
-name: BuildDockerImage
+name: Docker Image CI
 
 on:
-  workflow_dispatch :  
   push:
-    branches: [ "docker-main" ]
-  pull_request:
-    branches: [ "docker-main" ]
+    branches: [ "docker-main" ] # Trigger on merge/direct push to docker-main
+  workflow_dispatch: # Allow manual triggering
 
 jobs:
-
-  build-and-publish-docker:
-
-    runs-on: h4ckermike/act_base:latest
+  build-and-push: # Renamed job for clarity
+    runs-on: h4ckermike/act_base:latest # Keeping custom runner
 
     steps:
-    - uses: actions/checkout@v3
-    - name: Build the Docker imaage
-      run: docker-compose build 
-    - name: Build the Docker imaage
-      run: docker-compose push
-      env:
-        DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
-        DOCKER_HUB_PASSWORD: ${{ secrets.DOCKER_HUB_PASSWORD }}
+    - name: Checkout repository
+      uses: actions/checkout@v4 # Updated to v4
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+
+    - name: Build and tag the ai_ticket Docker image
+      run: |
+        # Docker Hub images are typically <username>/<repository>:<tag>
+        # Using 'latest' and commit SHA for tagging
+        IMAGE_TAG_LATEST=${{ secrets.DOCKER_HUB_USERNAME }}/ai-ticket:latest
+        IMAGE_TAG_SHA=${{ secrets.DOCKER_HUB_USERNAME }}/ai-ticket:sha-${GITHUB_SHA::7}
+
+        docker build . -t $IMAGE_TAG_LATEST -t $IMAGE_TAG_SHA -f Dockerfile
+        # The 'docker-compose build ai_ticket' command could also be used if preferred,
+        # but then it needs to be tagged correctly before pushing.
+        # e.g., docker-compose build ai_ticket
+        # docker tag ai_ticket $IMAGE_TAG_LATEST
+        # docker tag ai_ticket $IMAGE_TAG_SHA
+
+    - name: Push the ai_ticket Docker image
+      run: |
+        IMAGE_TAG_LATEST=${{ secrets.DOCKER_HUB_USERNAME }}/ai-ticket:latest
+        IMAGE_TAG_SHA=${{ secrets.DOCKER_HUB_USERNAME }}/ai-ticket:sha-${GITHUB_SHA::7}
+        docker push $IMAGE_TAG_LATEST
+        docker push $IMAGE_TAG_SHA
