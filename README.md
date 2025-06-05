@@ -155,6 +155,8 @@ The primary method for running the system is using Docker Compose.
 The `ai_ticket` service, once running, will process events. The exact mechanism for sending events to it (e.g., an HTTP endpoint if exposed by the Python application, or another message queue) depends on how the `ENTRYPOINT` or `CMD` in the `Dockerfile` is configured to run the Python application. The current setup implies the Python application itself would need to implement the listening mechanism (e.g., a simple web server).
 
 ## Examples
+The `ai_ticket` service will process events sent to it (the mechanism for sending events, e.g. HTTP endpoint, would need to be defined or is part of how the Docker image's `ENTRYPOINT` or `CMD` is configured). It then queries the configured KoboldCPP backend.
+
 
 The main way to interact with the `ai-ticket` system programmatically (if you were importing it as a Python library, or for testing) is via its `on_event` function.
 

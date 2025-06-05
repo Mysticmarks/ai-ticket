@@ -60,15 +60,14 @@ def on_event(event_data: dict):
     # Handle empty string prompt if it's not desired (optional, depends on backend capability)
     # For now, allow empty string prompts to be passed to the backend.
 
-    logging.info(f"Extracted prompt: '{prompt_text}'")
+    print(f"Extracted prompt: '{prompt_text}'")
 
-    # Call KoboldCPP client
     result = get_kobold_completion(prompt=prompt_text)
 
-    if "error" in result:
-        logging.error(f"Error received from get_kobold_completion: {result}")
-        # Directly return the error dictionary from the client
-        return result
-    
-    logging.info(f"Successfully received completion: {result.get('completion')[:100]}...")
-    return result
+    if "completion" in result:
+        print(f"KoboldCPP completion: {result['completion']}")
+        return {"completion": result['completion']}
+    else:
+        # Error already printed by get_kobold_completion
+        print(f"Failed to get completion from KoboldCPP. Error: {result.get('error')}")
+        return {"error": result.get("error", "Failed to get completion from KoboldCPP.")}
