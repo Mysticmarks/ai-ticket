@@ -10,8 +10,8 @@ setup(
     author_email='jmikedupont2@example.com',
     url='https://github.com/jmikedupont2/ai-ticket',
     install_requires=[
-        'PyGithub',
         'python-dotenv',
+        'requests', # Ensure requests is listed here as it's used by kobold_client
     ],
     classifiers=[
         'Programming Language :: Python :: 3',

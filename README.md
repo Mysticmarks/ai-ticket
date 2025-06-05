@@ -1,5 +1,5 @@
 # ai-ticket
-[![CI Status](https://github.com/jmikedupont2/ai-ticket/actions/workflows/ci.yml/badge.svg)](https://github.com/jmikedupont2/ai-ticket/actions/workflows/ci.yml)
+[![CI Status](https://github.com/jmikedupont2/ai-ticket/actions/workflows/ci.yml/badge.svg)](https://github.com/jmikedupont2/ai-ticket/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/jmikedupont2/ai-ticket/branch/docker-main/graph/badge.svg)](https://codecov.io/gh/jmikedupont2/ai-ticket) [![Linting: Flake8](https://img.shields.io/badge/linting-flake8-blue.svg)](https://flake8.pycqa.org/)
 
 The AI Ticket system to handle the AI with tickets. Human Powered AI-Ops to Help you with the last mile of your AI code generated system.
 
@@ -26,7 +26,7 @@ The system consists of several key components:
 *   **Docker Service**: Defined in `docker-compose.yml`:
     *   `ai_ticket`: The main application service, built from the local Dockerfile. This service runs the Python application.
 *   **GitHub Actions Workflows**: Located in `.github/workflows/`:
-    *   `ci.yml`: Continuous Integration workflow that lints, tests, and builds the `ai_ticket` Docker image on pushes/PRs to `docker-main`.
+    *   `ci.yml`: Continuous Integration workflow that lints, tests, generates coverage reports, and builds the `ai_ticket` Docker image on pushes/PRs to `docker-main`.
     *   `docker-image.yml`: Builds and pushes the `ai_ticket` Docker image to Docker Hub on pushes to `docker-main`.
     *   `run.yml`: Manually triggered workflow to run the `ai_ticket` service using `docker-compose` (useful for running pre-built images).
     *   `static.yml`: Deploys static content (if any) to GitHub Pages from the `pyre` branch.
@@ -35,6 +35,7 @@ The system consists of several key components:
     *   `vendor/Auto-GPT-Plugin-Template`
     *   `vendor/lollms`
     *   `vendor/openai-python`
+    It's important to note that `vendor/Auto-GPT` is included as a submodule but is not actively used by the current core application logic.
 
 ## Prerequisites
 
@@ -114,7 +115,7 @@ docker-compose down
 
 The `ai_ticket` service will process events sent to it (the mechanism for sending events, e.g. HTTP endpoint, would need to be defined or is part of how the Docker image's `ENTRYPOINT` or `CMD` is configured). It then queries the configured KoboldCPP backend.
 =======
-The `autogpt` service is configured to run with specific goals related to introspection. The `mockopenai` service exposes a port (5000) which might be used by Auto-GPT.
+The system is designed to be extensible, and other services can be integrated as needed.
 
 ## Running Tests
 
