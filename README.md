@@ -7,32 +7,30 @@ The AI Ticket system to handle the AI with tickets. Human Powered AI-Ops to Help
 
 ## Project Overview
 
-ai-ticket is a Python-based system designed to facilitate interactions with AI models, particularly in the context of agent-based systems like Auto-GPT. It appears to use a ticket-based metaphor where user or system queries are handled as discrete units. The system leverages Docker for containerization and includes CI/CD workflows for testing, building, and deploying components.
+ai-ticket is a Python-based system designed to facilitate interactions with AI models. It processes events, extracts prompts, and interacts with a configurable Large Language Model (LLM) backend, currently focused on KoboldCPP. The system uses a ticket-based metaphor where user or system queries can be handled as discrete units. It leverages Docker for containerization and includes CI/CD workflows for testing and building.
 
-The original summary described a user-driven ticket-based workflow:
-- Users interact step-by-step, generating a "ticket" for each query/response.
-- A proxy server facilitates these interactions.
-- AutoGPT integrates via a "Request Assistance" action, linking to a GitHub ticket comment.
-- AutoGPT waits for ticket updates with user-generated responses to continue its workflow.
+The system is designed to:
+- Receive event data containing prompts (either directly or embedded in JSON).
+- Extract a usable prompt from the event data.
+- Send the prompt to a KoboldCPP compatible API.
+- Return the completion received from the LLM.
 
 ## Architecture
 
 The system consists of several key components:
 
 *   **`ai-ticket` Python Package**: The core logic, located in the `src/` directory. It includes modules for:
-    *   `ai_ticket.find_name`: A function to extract a name (e.g., an AI agent's name) from a structured text block.
-    *   `ai_ticket.events.inference`: Contains an `on_event` function, likely used for processing inference requests or events from an AI system.
-*   **Docker Services**: Defined in `docker-compose.yml`:
-    *   `ai_ticket`: The main application service, built from the local Dockerfile.
-    *   `autogpt`: A service running an instance of Auto-GPT, which appears to be integrated with `ai_ticket`. It installs `ai_ticket` as a plugin.
-    *   `mockopenai`: A service based on `lollms`, likely providing a mock or alternative OpenAI-compatible API endpoint for development or testing.
+    *   `ai_ticket.find_name`: A utility function to extract a name (e.g., an AI agent's name) from a structured text block.
+    *   `ai_ticket.events.inference`: Contains an `on_event` function for processing inference requests. This function extracts prompts and uses the `kobold_client`.
+    *   `ai_ticket.backends.kobold_client`: Provides `get_kobold_completion` function to interact with a KoboldCPP API.
+*   **Docker Service**: Defined in `docker-compose.yml`:
+    *   `ai_ticket`: The main application service, built from the local Dockerfile. This service runs the Python application.
 *   **GitHub Actions Workflows**: Located in `.github/workflows/`:
     *   `ci.yml`: Continuous Integration workflow that lints, tests, and builds the `ai_ticket` Docker image on pushes/PRs to `docker-main`.
     *   `docker-image.yml`: Builds and pushes the `ai_ticket` Docker image to Docker Hub on pushes to `docker-main`.
-    *   `run.yml`: Manually triggered workflow to run the full `docker-compose` setup.
+    *   `run.yml`: Manually triggered workflow to run the `ai_ticket` service using `docker-compose` (useful for running pre-built images).
     *   `static.yml`: Deploys static content (if any) to GitHub Pages from the `pyre` branch.
-*   **Submodules**: The project uses Git submodules to include external repositories:
-    *   `vendor/Auto-GPT`
+*   **Submodules**: The project uses Git submodules to include external repositories. While some, like `vendor/Auto-GPT` and `vendor/lollms`, were part of a previous architecture, they are not actively used by the current core application. The relevant ones for general utility or potential future integrations might include:
     *   `vendor/Auto-GPT-Benchmarks`
     *   `vendor/Auto-GPT-Plugin-Template`
     *   `vendor/lollms`
@@ -43,7 +41,8 @@ The system consists of several key components:
 *   **Git**: For cloning the repository, including submodules.
 *   **Python**: Version 3.10 (as specified in Dockerfile and CI).
 *   **Docker**: For running the application via `docker-compose`.
-*   **Docker Compose**: For orchestrating the multi-container setup.
+*   **Docker Compose**: For orchestrating the `ai_ticket` container.
+*   **KoboldCPP Instance**: A running instance of KoboldCPP (or a compatible API) accessible to the `ai_ticket` service.
 
 ## Getting Started
 
@@ -57,7 +56,12 @@ cd ai-ticket
 git submodule update --init --recursive
 ```
 
-### 2. Local Development Setup (Optional, if not using Docker exclusively)
+### 2. Configure KoboldCPP API Access
+
+The `ai_ticket` service needs to connect to a KoboldCPP API. By default, it tries `http://localhost:5001/api`. You can configure this by setting the `KOBOLDCPP_API_URL` environment variable.
+If running Docker on Docker Desktop, and your KoboldCPP instance is running on your host machine, you might use `http://host.docker.internal:5001/api`.
+
+### 3. Local Development Setup (Optional, if not using Docker exclusively)
 
 It's recommended to use a Python virtual environment for local development.
 
@@ -77,12 +81,18 @@ The `ai_ticket` package itself can be installed in editable mode if you are deve
 ```bash
 pip install -e .
 ```
+Ensure your `KOBOLDCPP_API_URL` environment variable is set if you run the Python code directly.
 
 ## Running the Application
 
-The primary way to run the system is using Docker Compose, which orchestrates the `ai_ticket`, `autogpt`, and `mockopenai` services.
+The primary way to run the system is using Docker Compose, which starts the `ai_ticket` service.
 
 ```bash
+# Ensure KOBOLDCPP_API_URL is set in your environment if not using the default
+# or if the default localhost:5001 is not accessible from within the container.
+# For example, in your .env file (which is gitignored):
+# KOBOLDCPP_API_URL=http://host.docker.internal:5001/api
+
 docker-compose up
 ```
 
@@ -93,7 +103,7 @@ docker-compose up -d
 
 To see logs:
 ```bash
-docker-compose logs -f
+docker-compose logs -f ai_ticket
 ```
 
 To stop the services:
@@ -101,6 +111,9 @@ To stop the services:
 docker-compose down
 ```
 
+
+The `ai_ticket` service will process events sent to it (the mechanism for sending events, e.g. HTTP endpoint, would need to be defined or is part of how the Docker image's `ENTRYPOINT` or `CMD` is configured). It then queries the configured KoboldCPP backend.
+=======
 The `autogpt` service is configured to run with specific goals related to introspection. The `mockopenai` service exposes a port (5000) which might be used by Auto-GPT.
 
 ## Running Tests
@@ -153,9 +166,9 @@ The project utilizes several GitHub Actions workflows:
 *   **`docker-image.yml` (Docker Image Publishing)**:
     *   Triggered on pushes to the `docker-main` branch (typically after merging) and can be manually dispatched.
     *   Builds the `ai_ticket` Docker image and pushes it to Docker Hub, tagged with `latest` and the commit SHA.
-*   **`run.yml` (Run Full System)**:
+*   **`run.yml` (Run System via Docker Compose)**:
     *   Manually triggered workflow (`workflow_dispatch`).
-    *   Runs `docker-compose up --no-build` to start the full application stack using pre-built images.
+    *   Runs `docker-compose up --no-build` to start the `ai_ticket` service using pre-built images. This is useful for quick deployments or testing of the image defined in `docker-compose.yml`.
 *   **`static.yml` (Static Pages Deployment)**:
     *   Triggered on pushes to the `pyre` branch or manually.
     *   Deploys content to GitHub Pages. The exact content being deployed would need to be in the `pyre` branch.
@@ -169,6 +182,7 @@ The image is tagged as:
 *   `<your_dockerhub_username>/ai-ticket:sha-<commit_sha>`
 
 (Note: Replace `<your_dockerhub_username>` with the actual Docker Hub username, e.g., `jmikedupont2` if that's where it's configured to go via secrets).
+The service expects the `KOBOLDCPP_API_URL` environment variable to be set if the default is not suitable.
 
 ## Contributing
 
@@ -194,9 +208,35 @@ Contributions are welcome! Please follow these steps:
 
 ## Examples
 
-(This section can be expanded with specific examples of how `ai-ticket` is used, perhaps showing input/output of the `find_name` function or how the `on_event` is triggered and what it does.)
+The primary interaction with `ai-ticket` is via its `on_event` function, which takes a dictionary containing event data. A typical piece of event data would include a "content" field with a prompt for an LLM.
 
-Example of `find_name` usage (from tests):
+Example of how `on_event` might be called (conceptually):
+```python
+from ai_ticket.events.inference import on_event
+
+# Simulate an event payload
+event_data = {
+    "content": json.dumps({ # Content can be a JSON string
+        "messages": [
+            {"role": "user", "content": "Explain the theory of relativity in simple terms."}
+        ],
+        "model": "custom_model_if_needed_by_backend", # For Kobold, model is fixed in client
+        "max_tokens": 100
+    })
+}
+# Or simpler: event_data = {"content": "Explain the theory of relativity in simple terms."}
+
+# This would trigger a call to the KoboldCPP backend
+response = on_event(event_data)
+
+if "completion" in response:
+    print(f"LLM Response: {response['completion']}")
+elif "error" in response:
+    print(f"Error: {response['error']}")
+```
+
+The `find_name` utility can still be used independently:
+
 ```python
 from ai_ticket import find_name
 
@@ -211,7 +251,11 @@ print(f"Extracted Name: {name}") # Expected: Entrepreneur-GPT
 *   **Submodule Issues**: If you cloned without `--recursive` or submodules are out of sync, run `git submodule update --init --recursive`.
 *   **Docker Build Failures**: Check logs for specific errors. Ensure Docker daemon is running and you have internet connectivity.
 *   **Python Dependency Conflicts**: If using local development, ensure your virtual environment is activated and try reinstalling dependencies.
-*   **`mockopenai` service**: If Auto-GPT cannot connect to an OpenAI-compatible endpoint, ensure the `mockopenai` service is running correctly and configured as the endpoint for Auto-GPT if it's being used.
+*   **KoboldCPP Connection Issues**:
+    *   Ensure your KoboldCPP instance is running and accessible from where `ai_ticket` is running (either your host machine for local dev, or from within the Docker container).
+    *   Verify the `KOBOLDCPP_API_URL` (default `http://localhost:5001/api` or environment variable) is correct.
+    *   If running `ai_ticket` in Docker and KoboldCPP on the host, use `http://host.docker.internal:PORT/api` (Docker Desktop) or your host's IP address.
+    *   Check KoboldCPP logs for any errors.
 
 ---
 *This README was significantly expanded and restructured by an AI assistant.*
