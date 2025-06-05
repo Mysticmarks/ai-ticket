@@ -31,6 +31,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install -r requirements-dev.txt
+        pip install pytest-cov
+
+    - name: Validate docker-compose.yml
+      run: |
+        docker-compose config -q
 
     - name: Lint with flake8
       run: |
@@ -46,7 +51,14 @@ jobs:
 
     - name: Run tests with pytest
       run: |
-        pytest tests/
+        pytest --cov=src/ai_ticket --cov-report=xml tests/
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: ./coverage.xml
+        fail_ci_if_error: true
 
     - name: Build Docker image for ai_ticket
       run: |
