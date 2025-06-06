@@ -11,6 +11,6 @@ services:
     extra_hosts: # Useful if KoboldCPP is running on the host machine
       - "host.docker.internal:host-gateway"
     # Add any other necessary configurations for ai_ticket, like ports if it exposes one.
-    # ports:
-    #   - "8000:8000" # Example if ai_ticket service ran on port 8000
+    ports:
+      - "5000:5000"
     restart: unless-stopped

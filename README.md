@@ -1,5 +1,5 @@
 # ai-ticket
-[![CI Status](https://github.com/jmikedupont2/ai-ticket/actions/workflows/ci.yml/badge.svg)](https://github.com/jmikedupont2/ai-ticket/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/jmikedupont2/ai-ticket/branch/docker-main/graph/badge.svg)](https://codecov.io/gh/jmikedupont2/ai-ticket) [![Linting: Flake8](https://img.shields.io/badge/linting-flake8-blue.svg)](https://flake8.pycqa.org/)
+[![CI Status](https://github.com/jmikedupont2/ai-ticket/actions/workflows/ci.yml/badge.svg)](https://github.com/jmikedupont2/ai-ticket/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/jmikedupont2/ai-ticket/branch/docker-main/graph/badge.svg)](https://codecov.io/gh/jmikedupont2/ai-ticket) [![Linting: Flake8](https://img.shields.io/badge/linting-flake8-blue.svg)](https://flake8.pycqa.org/) [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black) [![Imports: isort](https://img.shields.io/badge/%20imports-isort-%231674b1?style=flat&labelColor=ef8336)](https://pycqa.github.io/isort/)
 
 The AI Ticket system is designed to streamline interactions with Large Language Models (LLMs), with a primary focus on the KoboldCPP backend. It acts as a robust intermediary, processing event-based requests, managing communication with the LLM, and returning structured responses, including comprehensive error handling.
 
@@ -136,11 +136,13 @@ The primary method for running the system is using Docker Compose.
     docker-compose up --build
     ```
     The `--build` flag ensures the image is built with any local changes. For subsequent runs, you can omit it if the image hasn't changed.
+    The service will now be listening for POST requests on `http://localhost:5000/event`.
 
 3.  **Run in Detached Mode**:
     ```bash
     docker-compose up -d
     ```
+    The service will now be listening for POST requests on `http://localhost:5000/event`.
 
 4.  **View Logs**:
     ```bash
@@ -152,13 +154,19 @@ The primary method for running the system is using Docker Compose.
     docker-compose down
     ```
 
-The `ai_ticket` service, once running, will process events. The exact mechanism for sending events to it (e.g., an HTTP endpoint if exposed by the Python application, or another message queue) depends on how the `ENTRYPOINT` or `CMD` in the `Dockerfile` is configured to run the Python application. The current setup implies the Python application itself would need to implement the listening mechanism (e.g., a simple web server).
+The `ai_ticket` service, once running, exposes an HTTP endpoint to receive events.
 
 ## Examples
-The `ai_ticket` service will process events sent to it (the mechanism for sending events, e.g. HTTP endpoint, would need to be defined or is part of how the Docker image's `ENTRYPOINT` or `CMD` is configured). It then queries the configured KoboldCPP backend.
+The `ai_ticket` service now exposes an HTTP endpoint to receive events. You can send a POST request with a JSON payload to `http://localhost:5000/event` when the service is running via Docker Compose.
 
+Here's an example using `curl`:
+```bash
+curl -X POST -H "Content-Type: application/json" \
+     -d '{"content": "Explain gravity to a five-year-old."}' \
+     http://localhost:5000/event
+```
 
-The main way to interact with the `ai-ticket` system programmatically (if you were importing it as a Python library, or for testing) is via its `on_event` function.
+The following Python examples demonstrate the direct usage of the `on_event` function, which is the core logic behind the HTTP endpoint. While you can use `on_event` directly if you integrate `ai_ticket` as a Python library, the primary interaction method for the deployed service is via the HTTP endpoint described above.
 
 ```python
 import json
@@ -255,7 +263,7 @@ The project utilizes several GitHub Actions workflows:
 *   **`run.yml` (Run Application)**:
     *   Manually triggered workflow (`workflow_dispatch`).
     *   Checks out the repository.
-    *   Runs `docker-compose up --no-build` to start the `ai_ticket` service using pre-built images (as defined in `docker-compose-run.yml`, which typically points to an image on Docker Hub). This is useful for quick deployments or testing of a specific image version.
+    *   Runs `docker-compose -f docker-compose-run.yml up --no-build` to start the `ai_ticket` service using the pre-built image and configurations specified in `docker-compose-run.yml` (which typically points to an image on Docker Hub). This is useful for quick deployments or testing of a specific image version.
 *   **`static.yml` (Static Pages Deployment)**:
     *   Triggered on pushes to the `pyre` branch or manually.
     *   Deploys content from the `pyre` branch to GitHub Pages.
