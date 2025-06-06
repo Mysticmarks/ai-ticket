@@ -1,5 +1,5 @@
 # ai-ticket
-[![CI Status](https://github.com/jmikedupont2/ai-ticket/actions/workflows/ci.yml/badge.svg)](https://github.com/jmikedupont2/ai-ticket/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/jmikedupont2/ai-ticket/branch/docker-main/graph/badge.svg)](https://codecov.io/gh/jmikedupont2/ai-ticket) [![Linting: Flake8](https://img.shields.io/badge/linting-flake8-blue.svg)](https://flake8.pycqa.org/)
+[![CI Status](https://github.com/jmikedupont2/ai-ticket/actions/workflows/ci.yml/badge.svg)](https://github.com/jmikedupont2/ai-ticket/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/jmikedupont2/ai-ticket/branch/docker-main/graph/badge.svg)](https://codecov.io/gh/jmikedupont2/ai-ticket) [![Linting: Flake8](https://img.shields.io/badge/linting-flake8-blue.svg)](https://flake8.pycqa.org/) [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black) [![Imports: isort](https://img.shields.io/badge/%20imports-isort-%231674b1?style=flat&labelColor=ef8336)](https://pycqa.github.io/isort/)
 
 The AI Ticket system is designed to streamline interactions with Large Language Models (LLMs), with a primary focus on the KoboldCPP backend. It acts as a robust intermediary, processing event-based requests, managing communication with the LLM, and returning structured responses, including comprehensive error handling.
 
@@ -284,7 +284,7 @@ The project utilizes several GitHub Actions workflows:
 *   **`run.yml` (Run Application)**:
     *   Manually triggered workflow (`workflow_dispatch`).
     *   Checks out the repository.
-    *   Runs `docker-compose up --no-build` to start the `ai_ticket` service using pre-built images (as defined in `docker-compose-run.yml`, which typically points to an image on Docker Hub). This is useful for quick deployments or testing of a specific image version.
+    *   Runs `docker-compose -f docker-compose-run.yml up --no-build` to start the `ai_ticket` service using the pre-built image and configurations specified in `docker-compose-run.yml` (which typically points to an image on Docker Hub). This is useful for quick deployments or testing of a specific image version.
 *   **`static.yml` (Static Pages Deployment)**:
     *   Triggered on pushes to the `pyre` branch or manually.
     *   Deploys content from the `pyre` branch to GitHub Pages.
