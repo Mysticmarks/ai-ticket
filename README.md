@@ -40,9 +40,11 @@ The system comprises several key components:
     *   `docker-image.yml`: Docker Image Publishing – Builds and pushes the `ai_ticket` image to Docker Hub.
     *   `run.yml`: Manual Application Run – Allows manual triggering to run the application using `docker-compose` with pre-built images.
     *   `static.yml`: Static Page Deployment – Deploys content from the `pyre` branch to GitHub Pages (user should verify content of `pyre` branch).
-*   **Submodules**:
-    *   The project has significantly simplified its structure by **removing all previously included Git submodules**. Directories like `vendor/lollms`, `vendor/Auto-GPT-Plugin-Template`, `vendor/Auto-GPT-Benchmarks`, `vendor/Auto-GPT`, and `vendor/openai-python` (which might have been present in older versions or local checkouts) are no longer part of the project's tracked files.
-    *   This change streamlines the project, reduces clutter, and clarifies that the core functionality does not depend on these external repositories. The project currently uses **no Git submodules**.
+*   **Submodules & the `vendor/` Directory**:
+    *   This project has significantly simplified its structure by **removing all previously included Git submodules**. As such, fresh clones of this repository will not include any submodules, and the `vendor/` directory (which previously housed them) will not be present.
+    *   If you have an older local clone of this repository, you might still see directories like `vendor/lollms`, `vendor/Auto-GPT`, `vendor/openai-python`, etc. These are remnants of the old submodule structure, are **no longer tracked by Git**, and are not used by the application.
+    *   You can safely delete the entire `vendor/` directory from your local workspace to avoid confusion and align with the current project structure.
+    *   This cleanup streamlines the project, reduces clutter, and clarifies that the core functionality does not depend on these external repositories. The project currently uses **no Git submodules**.
 
 ## Error Handling
 
