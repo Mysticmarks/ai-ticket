@@ -5,6 +5,8 @@ services:
     build:
       context: .
     restart: unless-stopped
+    ports:
+      - "5000:5000"
     # Optional: Add environment variables for KOBOLDCPP_API_URL if needed here
     # environment:
     #   - KOBOLDCPP_API_URL=http://host.docker.internal:5001/api

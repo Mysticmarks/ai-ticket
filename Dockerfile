@@ -6,3 +6,5 @@ COPY setup.py /opt/ai-ticket/
 COPY requirements.txt /opt/ai-ticket/
 COPY ./src/ /opt/ai-ticket/src/
 RUN pip install .
+EXPOSE 5000
+CMD ["python", "-m", "src.ai_ticket.server"]
