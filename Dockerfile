@@ -6,8 +6,3 @@ COPY setup.py /opt/ai-ticket/
 COPY requirements.txt /opt/ai-ticket/
 COPY ./src/ /opt/ai-ticket/src/
 RUN pip install .
-
-
-RUN apt-get update
-RUN apt-get install -y git
-RUN pip install --trusted-host pypi.python.org -r requirements.txt
