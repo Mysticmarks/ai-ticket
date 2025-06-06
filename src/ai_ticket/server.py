@@ -3,8 +3,17 @@ from flask import Flask, request, jsonify
 from ai_ticket.events.inference import on_event
 import logging
 
-# Basic logging configuration
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configure logging
+LOG_LEVEL_STR = os.environ.get("LOG_LEVEL", "INFO").upper()
+LOG_LEVEL_MAP = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+log_level = LOG_LEVEL_MAP.get(LOG_LEVEL_STR, logging.INFO)
+logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = Flask(__name__)
 
@@ -32,6 +41,10 @@ def handle_event():
 
     logging.info(f"Successfully processed event, response: {response}")
     return jsonify(response), 200
+
+@app.route("/health", methods=["GET"])
+def health_check():
+    return jsonify({"status": "healthy"}), 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

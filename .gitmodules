@@ -1,9 +1,0 @@
-[submodule "vendor/lollms"]
-	path = vendor/lollms
-	url = https://github.com/meta-introspector/lollms.git
-[submodule "vendor/Auto-GPT-Plugin-Template"]
-	path = vendor/Auto-GPT-Plugin-Template
-	url = https://github.com/Significant-Gravitas/Auto-GPT-Plugin-Template
-[submodule "vendor/Auto-GPT-Benchmarks"]
-	path = vendor/Auto-GPT-Benchmarks
-	url = https://github.com/Significant-Gravitas/Auto-GPT-Benchmarks
