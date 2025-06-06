@@ -1,2 +1,3 @@
 python-dotenv
 requests
+Flask>=2.0

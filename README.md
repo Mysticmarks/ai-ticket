@@ -136,11 +136,13 @@ The primary method for running the system is using Docker Compose.
     docker-compose up --build
     ```
     The `--build` flag ensures the image is built with any local changes. For subsequent runs, you can omit it if the image hasn't changed.
+    The service will now be listening for POST requests on `http://localhost:5000/event`.
 
 3.  **Run in Detached Mode**:
     ```bash
     docker-compose up -d
     ```
+    The service will now be listening for POST requests on `http://localhost:5000/event`.
 
 4.  **View Logs**:
     ```bash
@@ -152,13 +154,19 @@ The primary method for running the system is using Docker Compose.
     docker-compose down
     ```
 
-The `ai_ticket` service, once running, will process events. The exact mechanism for sending events to it (e.g., an HTTP endpoint if exposed by the Python application, or another message queue) depends on how the `ENTRYPOINT` or `CMD` in the `Dockerfile` is configured to run the Python application. The current setup implies the Python application itself would need to implement the listening mechanism (e.g., a simple web server).
+The `ai_ticket` service, once running, exposes an HTTP endpoint to receive events.
 
 ## Examples
-The `ai_ticket` service will process events sent to it (the mechanism for sending events, e.g. HTTP endpoint, would need to be defined or is part of how the Docker image's `ENTRYPOINT` or `CMD` is configured). It then queries the configured KoboldCPP backend.
+The `ai_ticket` service now exposes an HTTP endpoint to receive events. You can send a POST request with a JSON payload to `http://localhost:5000/event` when the service is running via Docker Compose.
 
+Here's an example using `curl`:
+```bash
+curl -X POST -H "Content-Type: application/json" \
+     -d '{"content": "Explain gravity to a five-year-old."}' \
+     http://localhost:5000/event
+```
 
-The main way to interact with the `ai-ticket` system programmatically (if you were importing it as a Python library, or for testing) is via its `on_event` function.
+The following Python examples demonstrate the direct usage of the `on_event` function, which is the core logic behind the HTTP endpoint. While you can use `on_event` directly if you integrate `ai_ticket` as a Python library, the primary interaction method for the deployed service is via the HTTP endpoint described above.
 
 ```python
 import json
