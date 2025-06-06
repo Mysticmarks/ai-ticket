@@ -27,19 +27,22 @@ The system comprises several key components:
 *   **`ai-ticket` Python Package (`src/ai_ticket/`)**:
     *   `events/inference.py`: Contains the main `on_event` function. This function is the primary entry point for interacting with the system. It handles input validation, prompt extraction, calls the KoboldCPP client, and formats the final response (either completion or error).
     *   `backends/kobold_client.py`: Provides the `get_kobold_completion` function responsible for all communication with the KoboldCPP API. It implements retry logic, endpoint fallback, and detailed error categorization.
+    *   `server.py`: The Flask application server, providing the HTTP interface (e.g., `/event`). It also includes a `/health` endpoint used for container health checking.
     *   `find_name.py`: A utility function to extract a name (e.g., an AI agent's name) from a structured text block. (Currently less central but available).
-*   **Docker Service (`docker-compose.yml`)**:
-    *   `ai_ticket`: The main application service, built from the local `Dockerfile`. It's configured for resilience (e.g., `restart: unless-stopped`).
-*   **Configuration**:
-    *   `KOBOLDCPP_API_URL`: Environment variable to specify the KoboldCPP API endpoint.
+*   **Docker Service (`docker-compose.yml` and `Dockerfile`)**:
+    *   `ai_ticket`: The main application service, built from the local `Dockerfile`. It's configured for resilience (e.g., `restart: unless-stopped`) and uses Gunicorn as the WSGI server.
+    *   **Health Check**: The Docker container is configured with a health check (via the `HEALTHCHECK` instruction in the `Dockerfile` and corresponding settings in `docker-compose.yml`) that periodically queries the `/health` endpoint to ensure the application is running correctly.
+*   **Configuration (Environment Variables)**:
+    *   `KOBOLDCPP_API_URL`: Specifies the KoboldCPP API endpoint. (Default: `http://localhost:5001/api` if not set, though providing it explicitly is recommended).
+    *   `LOG_LEVEL`: Sets the application's logging level (e.g., `DEBUG`, `INFO`, `WARNING`). (Default: `INFO`).
 *   **GitHub Actions Workflows (`.github/workflows/`)**:
     *   `ci.yml`: Continuous Integration – Lints, tests (with code coverage reporting to Codecov), validates `docker-compose.yml`, and builds the `ai_ticket` Docker image.
     *   `docker-image.yml`: Docker Image Publishing – Builds and pushes the `ai_ticket` image to Docker Hub.
     *   `run.yml`: Manual Application Run – Allows manual triggering to run the application using `docker-compose` with pre-built images.
     *   `static.yml`: Static Page Deployment – Deploys content from the `pyre` branch to GitHub Pages (user should verify content of `pyre` branch).
 *   **Submodules**:
-    *   The project previously used submodules like `vendor/Auto-GPT` and `vendor/openai-python`, but these have been **removed** to streamline focus on the core KoboldCPP interaction.
-    *   Remaining submodules like `vendor/lollms`, `vendor/Auto-GPT-Plugin-Template`, and `vendor/Auto-GPT-Benchmarks` are included for potential future utility or reference but are **not actively used** by the core `ai_ticket` application.
+    *   The project has significantly simplified its structure by **removing all previously included Git submodules**. Directories like `vendor/lollms`, `vendor/Auto-GPT-Plugin-Template`, `vendor/Auto-GPT-Benchmarks`, `vendor/Auto-GPT`, and `vendor/openai-python` (which might have been present in older versions or local checkouts) are no longer part of the project's tracked files.
+    *   This change streamlines the project, reduces clutter, and clarifies that the core functionality does not depend on these external repositories. The project currently uses **no Git submodules**.
 
 ## Error Handling
 
@@ -85,20 +88,27 @@ The `kobold_client` automatically retries requests that fail due to transient is
 ```bash
 git clone https://github.com/jmikedupont2/ai-ticket.git
 cd ai-ticket
-# Initialize and update any remaining relevant submodules (currently none are critical for core functionality)
-git submodule update --init --recursive
 ```
-*(Note: After recent cleanup, core functionality does not depend on specific submodules like Auto-GPT or openai-python, which have been removed.)*
+*(Note: This project no longer uses Git submodules, so commands like `git submodule update --init --recursive` are not needed.)*
 
-### 2. Configure KoboldCPP API Access
+### 2. Configure Environment Variables
 
-The `ai_ticket` service needs to connect to a KoboldCPP API.
-*   **Environment Variable**: Set the `KOBOLDCPP_API_URL` environment variable.
-    *   Example: `export KOBOLDCPP_API_URL="http://localhost:5001/api"`
-    *   If your KoboldCPP instance is running on your host machine and you are using Docker Desktop, you might use `http://host.docker.internal:5001/api`.
-*   **Default**: If the variable is not set, the system defaults to `http://localhost:5001/api`.
+The `ai_ticket` service is configured via environment variables. For local execution (including Docker Compose), it's recommended to create an `.env` file in the project root:
 
-This URL is crucial for the application to function.
+```env
+KOBOLDCPP_API_URL=http://your-koboldcpp-host:5001/api
+LOG_LEVEL=INFO
+```
+
+*   **`KOBOLDCPP_API_URL`** (Required): The full URL to your KoboldCPP API endpoint.
+    *   Replace `http://your-koboldcpp-host:5001/api` with the actual URL.
+    *   If KoboldCPP is running on your host machine and you are using Docker Desktop, you might use `http://host.docker.internal:5001/api`.
+    *   The application defaults to `http://localhost:5001/api` if this variable is not set, but explicitly setting it is highly recommended.
+*   **`LOG_LEVEL`** (Optional): Sets the application's logging verbosity.
+    *   Options: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
+    *   Default: `INFO`.
+
+This configuration is crucial for the application to function correctly. If not using an `.env` file, ensure these variables are exported in your shell environment.
 
 ### 3. Local Development Setup (Optional)
 
@@ -123,12 +133,18 @@ Remember to set the `KOBOLDCPP_API_URL` environment variable in your shell.
 
 ## Running the Application
 
-The primary method for running the system is using Docker Compose.
+The primary method for running the system is using Docker Compose. The application runs inside the Docker container using **Gunicorn** as the WSGI server, which provides a robust way to handle concurrent requests.
 
-1.  **Ensure `KOBOLDCPP_API_URL` is Set**: Make sure this environment variable is available in your shell or in an `.env` file in the project root (this file is gitignored).
-    Example `.env` file content:
-    ```
+1.  **Environment Variables**:
+    *   **`KOBOLDCPP_API_URL`** (Required): Ensure this environment variable is available in your shell or in an `.env` file in the project root. This variable is crucial for the application to connect to your KoboldCPP instance. See the "Getting Started" section for more details on setting this up.
+        Example value: `http://host.docker.internal:5001/api`
+    *   **`LOG_LEVEL`** (Optional): Set this to configure the application's logging verbosity. Valid values are `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Defaults to `INFO`.
+        Example value: `DEBUG`
+
+    You can create an `.env` file in the project root to manage these:
+    ```env
     KOBOLDCPP_API_URL=http://host.docker.internal:5001/api
+    LOG_LEVEL=INFO
     ```
 
 2.  **Start the Service**:
@@ -136,7 +152,7 @@ The primary method for running the system is using Docker Compose.
     docker-compose up --build
     ```
     The `--build` flag ensures the image is built with any local changes. For subsequent runs, you can omit it if the image hasn't changed.
-    The service will now be listening for POST requests on `http://localhost:5000/event`.
+    The service, running with Gunicorn, will now be listening for POST requests on `http://localhost:5000/event` and health checks on `http://localhost:5000/health`.
 
 3.  **Run in Detached Mode**:
     ```bash
@@ -223,7 +239,10 @@ if agent_name:
 
 *   **`KOBOLDCPP_API_URL` Not Set / Incorrect**:
     *   **Symptom**: Errors like `{"error": "configuration_error", ...}` or connection failures.
-    *   **Solution**: Ensure `KOBOLDCPP_API_URL` is correctly set in your environment (e.g., via `export` or in an `.env` file) and points to your running KoboldCPP instance's API endpoint (typically ending in `/api`).
+    *   **Solution**: Ensure `KOBOLDCPP_API_URL` is correctly set in your environment (e.g., via `export` or in an `.env` file as described in "Getting Started") and points to your running KoboldCPP instance's API endpoint (typically ending in `/api`).
+*   **Logging Configuration**:
+    *   **Symptom**: Logs are too verbose or not detailed enough.
+    *   **Solution**: Adjust the `LOG_LEVEL` environment variable. Set it to `DEBUG` for more detailed output when troubleshooting, or to `WARNING` or `ERROR` for less verbose logs in production. Default is `INFO`.
 *   **KoboldCPP Connection Issues (`api_connection_error`)**:
     *   Ensure your KoboldCPP instance is running and accessible from where `ai_ticket` is running (your host machine for local dev, or from within the Docker container).
     *   Verify the `KOBOLDCPP_API_URL` is correct.
@@ -232,8 +251,8 @@ if agent_name:
     *   Firewall issues might be blocking the connection.
 *   **Authentication Errors (`api_authentication_error`)**:
     *   This indicates that the KoboldCPP instance requires authentication, and `ai_ticket` is not configured for it (currently, it doesn't support passing auth tokens). Ensure your KoboldCPP API is accessible without authentication if you intend to use it with `ai_ticket` as is.
-*   **Submodule Issues (General)**:
-    *   If you encounter issues related to submodules (though core functionality no longer relies on the removed ones), ensure they are correctly initialized: `git submodule update --init --recursive`.
+*   **Submodule Issues**:
+    *   This project no longer uses Git submodules. If you have an old clone of the repository, you might want to ensure your working directory is clean (e.g., by running `git clean -fdx` in the `vendor` directory if it still exists and you're sure you don't need its contents, or by starting with a fresh clone).
 *   **Docker Build Failures**:
     *   Check Docker daemon status and internet connectivity.
     *   Examine build logs for specific error messages (e.g., dependency installation failures).
