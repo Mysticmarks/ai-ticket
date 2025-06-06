@@ -7,7 +7,5 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        submodules: 'true'        
     - name: Run application with docker-compose
-      run: docker-compose up --no-build
+      run: docker-compose -f docker-compose-run.yml up --no-build
