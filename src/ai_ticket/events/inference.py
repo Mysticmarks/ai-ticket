@@ -6,7 +6,10 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from ai_ticket.backends.kobold_client import get_kobold_completion
+from ai_ticket.backends.kobold_client import (
+    KoboldCompletionResult,
+    get_kobold_completion,
+)
 
 from .prompt_extraction import PromptExtractionResult, extract_prompt
 from .validation import ValidationError
@@ -72,21 +75,28 @@ def on_event(event_data: Mapping[str, Any], *, logger: logging.Logger | None = N
     logger.info("Submitting prompt to completion backend", extra={"prompt_preview": extraction.prompt[:80]})
     backend_result = get_kobold_completion(prompt=extraction.prompt)
 
-    if isinstance(backend_result, Mapping) and "completion" in backend_result:
+    if isinstance(backend_result, KoboldCompletionResult):
+        if backend_result.completion:
+            completion_text = backend_result.completion
+            logger.info(
+                "Completion backend succeeded",
+                extra={"response_length": len(completion_text)},
+            )
+            return CompletionResponse(completion=completion_text)
+
+        error_code = backend_result.error or "backend_error"
+        error_detail = backend_result.details
+    elif isinstance(backend_result, Mapping) and "completion" in backend_result:
         completion_text = str(backend_result["completion"])
         logger.info("Completion backend succeeded", extra={"response_length": len(completion_text)})
         return CompletionResponse(completion=completion_text)
-
-    if isinstance(backend_result, str):
+    elif isinstance(backend_result, str):
         completion_text = backend_result
         logger.info("Completion backend succeeded", extra={"response_length": len(completion_text)})
         return CompletionResponse(completion=completion_text)
-
-    error_detail = None
-    error_code = "backend_error"
-    if isinstance(backend_result, Mapping):
-        error_code = str(backend_result.get("error", error_code))
-        error_detail = backend_result.get("details")
+    else:
+        error_code = "backend_error"
+        error_detail = None
 
     logger.error("Completion backend failed", extra={
         "error_code": error_code,
