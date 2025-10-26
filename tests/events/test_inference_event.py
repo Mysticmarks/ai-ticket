@@ -2,11 +2,8 @@ import json
 
 import pytest
 
-from ai_ticket.events.inference import (
-    CompletionResponse,
-    ErrorResponse,
-    on_event,
-)
+from ai_ticket.backends.kobold_client import KoboldCompletionResult
+from ai_ticket.events.inference import CompletionResponse, ErrorResponse, on_event
 
 
 @pytest.fixture
@@ -15,7 +12,7 @@ def mock_get_kobold_completion(mocker):
 
 
 def test_on_event_simple_prompt_success(mock_get_kobold_completion):
-    mock_get_kobold_completion.return_value = {"completion": "Mocked completion"}
+    mock_get_kobold_completion.return_value = KoboldCompletionResult(completion="Mocked completion")
 
     event_data = {"content": "Hello Kobold"}
     result = on_event(event_data)
@@ -26,7 +23,7 @@ def test_on_event_simple_prompt_success(mock_get_kobold_completion):
 
 
 def test_on_event_json_prompt_messages_success(mock_get_kobold_completion):
-    mock_get_kobold_completion.return_value = {"completion": "JSON completion"}
+    mock_get_kobold_completion.return_value = KoboldCompletionResult(completion="JSON completion")
 
     json_content = json.dumps(
         {
@@ -45,7 +42,7 @@ def test_on_event_json_prompt_messages_success(mock_get_kobold_completion):
 
 
 def test_on_event_json_prompt_direct_success(mock_get_kobold_completion):
-    mock_get_kobold_completion.return_value = {"completion": "Direct JSON prompt completion"}
+    mock_get_kobold_completion.return_value = KoboldCompletionResult(completion="Direct JSON prompt completion")
 
     json_content = json.dumps({"prompt": "Direct prompt here"})
     event_data = {"content": json_content}
@@ -77,7 +74,10 @@ def test_on_event_prompt_extraction_failure(mock_get_kobold_completion):
 
 
 def test_on_event_backend_failure(mock_get_kobold_completion):
-    mock_get_kobold_completion.return_value = {"error": "api_failure", "details": "boom"}
+    mock_get_kobold_completion.return_value = KoboldCompletionResult(
+        error="api_failure",
+        details="boom",
+    )
 
     event_data = {"content": "A prompt that will fail"}
     result = on_event(event_data)
