@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Callable, Final
 
@@ -19,6 +21,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_KOBOLDCPP_API_URL: Final[str] = "http://localhost:5001/api"
 MAX_RETRIES: Final[int] = 3
 _BACKOFF_SECONDS: Final[tuple[float, ...]] = (0.1, 0.25, 0.5)
+_TRANSIENT_ERRORS: Final[frozenset[str]] = frozenset(
+    {
+        "api_connection_error",
+        "api_server_error",
+        "api_rate_limited",
+        "api_request_error",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -117,132 +127,230 @@ def get_kobold_completion(
         )
 
     headers = {"Content-Type": "application/json"}
-    last_error: KoboldCompletionResult | None = None
+    errors: list[KoboldCompletionResult] = []
 
     for endpoint in _ENDPOINTS:
-        endpoint_url = f"{base_url}{endpoint.path}"
-        logger.info("Attempting KoboldCPP %s endpoint", endpoint.name, extra={"url": endpoint_url})
+        result = _fetch_from_endpoint(
+            endpoint=endpoint,
+            endpoint_url=f"{base_url}{endpoint.path}",
+            prompt=prompt,
+            max_length=max_length,
+            temperature=temperature,
+            top_p=top_p,
+            headers=headers,
+        )
+        if result.is_success:
+            return result
+        errors.append(result)
+        if result.error not in _TRANSIENT_ERRORS:
+            return result
 
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                response = requests.post(
-                    endpoint_url,
-                    headers=headers,
-                    json=endpoint.payload_builder(prompt, max_length, temperature, top_p),
-                    timeout=120,
-                )
-                response.raise_for_status()
-            except requests.exceptions.HTTPError as exc:  # type: ignore[attr-defined]
-                status_code = exc.response.status_code if exc.response is not None else None
-                logger.warning(
-                    "HTTP error from KoboldCPP %s endpoint", endpoint.name,
-                    extra={"status_code": status_code, "attempt": attempt},
-                )
+    return _choose_error(
+        errors,
+        default_detail="All attempts to contact KoboldCPP API failed.",
+    )
 
-                if status_code in {401, 403}:
-                    return KoboldCompletionResult(
-                        error="api_authentication_error",
-                        details=f"Authentication failed for {endpoint.name} endpoint.",
-                    )
 
-                if status_code == 429:
-                    last_error = KoboldCompletionResult(
-                        error="api_rate_limited",
-                        details=f"Rate limit encountered for {endpoint.name} endpoint.",
-                    )
-                    _sleep(attempt)
-                    continue
+async def async_get_kobold_completion(
+    prompt: str,
+    kobold_url: str | None = None,
+    max_length: int = 150,
+    temperature: float = 0.7,
+    top_p: float = 1.0,
+) -> KoboldCompletionResult:
+    """Asynchronously fetch a text completion from a KoboldCPP API."""
 
-                if status_code is not None and 400 <= status_code < 500:
-                    return KoboldCompletionResult(
-                        error="api_client_error",
-                        details=_build_http_error_detail(endpoint.name, exc),
-                    )
+    base_url = (kobold_url or os.getenv("KOBOLDCPP_API_URL") or DEFAULT_KOBOLDCPP_API_URL).rstrip("/")
 
-                last_error = KoboldCompletionResult(
-                    error="api_server_error",
+    if not base_url:
+        logger.error("KoboldCPP base URL is missing.")
+        return KoboldCompletionResult(
+            error="configuration_error",
+            details="KOBOLDCPP_API_URL is not configured.",
+        )
+
+    headers = {"Content-Type": "application/json"}
+
+    async def _execute(endpoint: _EndpointSpec) -> KoboldCompletionResult:
+        return await asyncio.to_thread(
+            _fetch_from_endpoint,
+            endpoint,
+            f"{base_url}{endpoint.path}",
+            prompt,
+            max_length,
+            temperature,
+            top_p,
+            headers,
+        )
+
+    tasks = [asyncio.create_task(_execute(endpoint)) for endpoint in _ENDPOINTS]
+    errors: list[KoboldCompletionResult] = []
+
+    try:
+        for task in asyncio.as_completed(tasks):
+            result = await task
+            if result.is_success:
+                for pending in tasks:
+                    if pending is not task and not pending.done():
+                        pending.cancel()
+                return result
+            errors.append(result)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+    return _choose_error(
+        errors,
+        default_detail="All asynchronous attempts to contact KoboldCPP API failed.",
+    )
+
+
+def _fetch_from_endpoint(
+    endpoint: _EndpointSpec,
+    endpoint_url: str,
+    prompt: str,
+    max_length: int,
+    temperature: float,
+    top_p: float,
+    headers: dict[str, str],
+) -> KoboldCompletionResult:
+    last_error: KoboldCompletionResult | None = None
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        logger.info(
+            "Attempting KoboldCPP %s endpoint",
+            endpoint.name,
+            extra={"url": endpoint_url, "attempt": attempt},
+        )
+
+        try:
+            response = requests.post(
+                endpoint_url,
+                headers=headers,
+                json=endpoint.payload_builder(prompt, max_length, temperature, top_p),
+                timeout=120,
+            )
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as exc:  # type: ignore[attr-defined]
+            status_code = exc.response.status_code if exc.response is not None else None
+            logger.warning(
+                "HTTP error from KoboldCPP %s endpoint",
+                endpoint.name,
+                extra={"status_code": status_code, "attempt": attempt},
+            )
+
+            if status_code in {401, 403}:
+                return KoboldCompletionResult(
+                    error="api_authentication_error",
                     details=_build_http_error_detail(endpoint.name, exc),
                 )
 
-                retryable = status_code is not None and 500 <= status_code < 600
-                if retryable and attempt < MAX_RETRIES:
-                    _sleep(attempt)
-                    continue
-
-                break
-
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:  # type: ignore[attr-defined]
-                logger.warning(
-                    "Connection issue contacting KoboldCPP %s endpoint", endpoint.name,
-                    extra={"attempt": attempt, "error": str(exc)},
-                )
+            if status_code == 429:
                 last_error = KoboldCompletionResult(
-                    error="api_connection_error",
-                    details=str(exc),
+                    error="api_rate_limited",
+                    details=_build_http_error_detail(endpoint.name, exc),
                 )
-                if attempt == MAX_RETRIES:
-                    break
                 _sleep(attempt)
                 continue
 
-            except requests.exceptions.RequestException as exc:  # type: ignore[attr-defined]
-                logger.error(
-                    "Unexpected request error contacting KoboldCPP %s endpoint", endpoint.name,
-                    extra={"error": str(exc)},
-                )
-                last_error = KoboldCompletionResult(
-                    error="api_request_error",
-                    details=str(exc),
-                )
-                break
-
-            try:
-                payload = response.json()
-            except json.JSONDecodeError as exc:
-                logger.error(
-                    "Invalid JSON from KoboldCPP %s endpoint", endpoint.name,
-                    extra={"error": str(exc)},
-                )
+            if status_code is not None and 400 <= status_code < 500:
                 return KoboldCompletionResult(
-                    error="api_response_format_error",
-                    details=f"Failed to decode JSON response from {endpoint.name} endpoint: {exc}",
+                    error="api_client_error",
+                    details=_build_http_error_detail(endpoint.name, exc),
                 )
-
-            completion_text = endpoint.extractor(payload)
-            if completion_text is not None:
-                logger.info(
-                    "Received completion from KoboldCPP %s endpoint", endpoint.name,
-                    extra={"length": len(completion_text)},
-                )
-                return KoboldCompletionResult(completion=completion_text)
 
             last_error = KoboldCompletionResult(
-                error="api_response_structure_error",
-                details=f"Unexpected JSON payload from {endpoint.name} endpoint: {json.dumps(payload)[:200]}",
+                error="api_server_error",
+                details=_build_http_error_detail(endpoint.name, exc),
             )
-            logger.error(
-                "Unexpected payload structure from KoboldCPP %s endpoint", endpoint.name,
-                extra={"payload": payload},
-            )
+
+            retryable = status_code is not None and 500 <= status_code < 600
+            if retryable and attempt < MAX_RETRIES:
+                _sleep(attempt)
+                continue
+
             break
 
-        if last_error and last_error.error not in {
-            "api_connection_error",
-            "api_server_error",
-            "api_rate_limited",
-            "api_request_error",
-        }:
-            return last_error
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:  # type: ignore[attr-defined]
+            logger.warning(
+                "Connection issue contacting KoboldCPP %s endpoint",
+                endpoint.name,
+                extra={"attempt": attempt, "error": str(exc)},
+            )
+            last_error = KoboldCompletionResult(
+                error="api_connection_error",
+                details=str(exc),
+            )
+            if attempt == MAX_RETRIES:
+                break
+            _sleep(attempt)
+            continue
+
+        except requests.exceptions.RequestException as exc:  # type: ignore[attr-defined]
+            logger.error(
+                "Unexpected request error contacting KoboldCPP %s endpoint",
+                endpoint.name,
+                extra={"error": str(exc)},
+            )
+            return KoboldCompletionResult(
+                error="api_request_error",
+                details=str(exc),
+            )
+
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "Invalid JSON from KoboldCPP %s endpoint",
+                endpoint.name,
+                extra={"error": str(exc)},
+            )
+            return KoboldCompletionResult(
+                error="api_response_format_error",
+                details=f"Failed to decode JSON response from {endpoint.name} endpoint: {exc}",
+            )
+
+        completion_text = endpoint.extractor(payload)
+        if completion_text is not None:
+            logger.info(
+                "Received completion from KoboldCPP %s endpoint",
+                endpoint.name,
+                extra={"length": len(completion_text)},
+            )
+            return KoboldCompletionResult(completion=completion_text)
+
+        last_error = KoboldCompletionResult(
+            error="api_response_structure_error",
+            details=f"Unexpected JSON payload from {endpoint.name} endpoint: {json.dumps(payload)[:200]}",
+        )
+        logger.error(
+            "Unexpected payload structure from KoboldCPP %s endpoint",
+            endpoint.name,
+            extra={"payload": payload},
+        )
+        break
 
     return last_error or KoboldCompletionResult(
         error="api_unknown_error",
-        details="All attempts to contact KoboldCPP API failed.",
+        details=f"All attempts to contact {endpoint.name} endpoint failed.",
     )
 
 
 def _sleep(attempt: int) -> None:
     backoff_index = min(attempt - 1, len(_BACKOFF_SECONDS) - 1)
     time.sleep(_BACKOFF_SECONDS[backoff_index])
+
+
+def _choose_error(errors: list[KoboldCompletionResult], *, default_detail: str) -> KoboldCompletionResult:
+    for error in errors:
+        if error.error not in _TRANSIENT_ERRORS:
+            return error
+    if errors:
+        return errors[-1]
+    return KoboldCompletionResult(error="api_unknown_error", details=default_detail)
 
 
 def _build_http_error_detail(endpoint_name: str, exc: requests.exceptions.HTTPError) -> str:
@@ -254,4 +362,8 @@ def _build_http_error_detail(endpoint_name: str, exc: requests.exceptions.HTTPEr
     return f"HTTP error {status} from {endpoint_name} endpoint.{snippet}"
 
 
-__all__ = ["KoboldCompletionResult", "get_kobold_completion"]
+__all__ = [
+    "KoboldCompletionResult",
+    "get_kobold_completion",
+    "async_get_kobold_completion",
+]
