@@ -2,3 +2,5 @@ python-dotenv
 requests
 Flask>=2.0
 gunicorn
+pydantic>=1.10
+prometheus-client>=0.20

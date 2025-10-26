@@ -1,15 +1,18 @@
+"""Public package exports."""
+
 import re
+from typing import Optional
 
-pattern = r'(```)?\s*{\s*"messages"\s*:\s*\[\s*\{\s*"role"\s*:\s*"system"\s*,\s*\"content"\s*:\s*"You\s+are\s+(?P<name>[^,]+),.*'
+_NAME_PATTERN = re.compile(r'"content"\s*:\s*"You\s+are\s+([^,"]+)')
 
-def find_name(text):
-    if not text:
+
+def find_name(text: Optional[str]):
+    """Extract the agent name from the system message payload."""
+
+    if not text or not isinstance(text, str):
         return False
-    if not isinstance(text,str):
-        return False
-    match = re.match(pattern, text)
+
+    match = _NAME_PATTERN.search(text)
     if match:
-        extracted_name = match.group(2)
-        return extracted_name
-    else:
-        return None
+        return match.group(1).strip()
+    return None

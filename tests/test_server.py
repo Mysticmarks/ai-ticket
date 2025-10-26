@@ -24,19 +24,16 @@ def test_handle_event_success(client, mocker):
     mock_on_event.assert_called_once_with(payload)
 
 def test_handle_event_missing_content(client, mocker):
-    # Mock on_event to ensure it's not called if input validation fails early
-    # or to control its return if server.py calls it before its own validation.
-    # The current server.py calls on_event, so we mock its error return.
     mock_on_event = mocker.patch('src.ai_ticket.server.on_event')
-    mock_on_event.return_value = {"error": "missing_content_field", "details": "'content' field is missing..."}
 
-    payload = {"some_other_key": "some_value"} # Missing 'content'
+    payload = {"some_other_key": "some_value"}  # Missing 'content'
     response = client.post("/event", json=payload)
 
-    assert response.status_code == 400 # Assuming server.py maps this error to 400
+    assert response.status_code == 400
     response_data = json.loads(response.data)
-    assert response_data["error"] == "missing_content_field"
-    mock_on_event.assert_called_once_with(payload)
+    assert response_data["error"] == "invalid_request"
+    assert "details" in response_data
+    mock_on_event.assert_not_called()
 
 
 def test_handle_event_not_json(client, mocker):
@@ -59,7 +56,7 @@ def test_handle_event_on_event_error(client, mocker):
     payload = {"content": "Test prompt for API error"}
     response = client.post("/event", json=payload)
 
-    assert response.status_code == 503 # As per server.py logic for this error
+    assert response.status_code == 503
     response_data = json.loads(response.data)
     assert response_data["error"] == "api_connection_error"
     mock_on_event.assert_called_once_with(payload)
@@ -75,3 +72,30 @@ def test_handle_event_prompt_extraction_failed(client, mocker):
     response_data = json.loads(response.data)
     assert response_data["error"] == "prompt_extraction_failed"
     mock_on_event.assert_called_once_with(payload)
+
+
+def test_readiness_probe_not_ready(monkeypatch, client):
+    monkeypatch.setenv("KOBOLDCPP_API_URL", "")
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 503
+    body = json.loads(response.data)
+    assert body["error"] == "service_unavailable"
+    assert "koboldcpp_api_url_not_configured" in body["details"]["reasons"]
+
+
+def test_readiness_probe_ready(monkeypatch, client):
+    monkeypatch.setenv("KOBOLDCPP_API_URL", "http://example.com/api")
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 200
+    assert json.loads(response.data)["status"] == "ready"
+
+
+def test_metrics_endpoint(client):
+    response = client.get("/metrics")
+
+    assert response.status_code == 200
+    assert b"ai_ticket_http_requests_total" in response.data

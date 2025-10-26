@@ -27,7 +27,7 @@ The system comprises several key components:
 *   **`ai-ticket` Python Package (`src/ai_ticket/`)**:
     *   `events/inference.py`: Contains the main `on_event` function. This function is the primary entry point for interacting with the system. It handles input validation, prompt extraction, calls the KoboldCPP client, and formats the final response (either completion or error).
     *   `backends/kobold_client.py`: Provides the `get_kobold_completion` function responsible for all communication with the KoboldCPP API. It implements retry logic, endpoint fallback, and detailed error categorization.
-    *   `server.py`: The Flask application server, providing the HTTP interface (e.g., `/event`). It also includes a `/health` endpoint used for container health checking.
+    *   `server.py`: The Flask application server, providing the HTTP interface (e.g., `/event`). It now layers request validation, authentication middleware, centralized error handling, Prometheus metrics, and operational probes (`/healthz`, `/readyz`, `/livez`).
     *   `find_name.py`: A utility function to extract a name (e.g., an AI agent's name) from a structured text block. (Currently less central but available).
 *   **Docker Service (`docker-compose.yml` and `Dockerfile`)**:
     *   `ai_ticket`: The main application service, built from the local `Dockerfile`. It's configured for resilience (e.g., `restart: unless-stopped`) and uses Gunicorn as the WSGI server.
@@ -35,6 +35,10 @@ The system comprises several key components:
 *   **Configuration (Environment Variables)**:
     *   `KOBOLDCPP_API_URL`: Specifies the KoboldCPP API endpoint. (Default: `http://localhost:5001/api` if not set, though providing it explicitly is recommended).
     *   `LOG_LEVEL`: Sets the application's logging level (e.g., `DEBUG`, `INFO`, `WARNING`). (Default: `INFO`).
+    *   `AI_TICKET_AUTH_TOKENS`: Optional comma-separated list of bearer tokens. When provided, every request (except metrics and health probes) must send one of these tokens via the `Authorization: Bearer <token>` header.
+    *   `AI_TICKET_API_KEYS`: Optional comma-separated list of API keys accepted via a custom header (defaults to `X-API-Key`).
+    *   `AI_TICKET_API_KEY_HEADER`: Optional header name to use when validating API keys. Defaults to `X-API-Key`.
+    *   `PORT`: Overrides the default listen port (`5000`) when running the Flask development server directly.
 *   **GitHub Actions Workflows (`.github/workflows/`)**:
     *   `ci.yml`: Continuous Integration – Lints, tests (with code coverage reporting to Codecov), validates `docker-compose.yml`, and builds the `ai_ticket` Docker image.
     *   `docker-image.yml`: Docker Image Publishing – Builds and pushes the `ai_ticket` image to Docker Hub.
@@ -173,6 +177,77 @@ The primary method for running the system is using Docker Compose. The applicati
     ```
 
 The `ai_ticket` service, once running, exposes an HTTP endpoint to receive events.
+
+## Observability and Operational Readiness
+
+The Flask server layers several operational concerns on top of the business logic:
+
+*   **Request Validation** – Incoming payloads are validated with [Pydantic](https://docs.pydantic.dev/). Invalid payloads are rejected with a structured error before they reach the event handler.
+*   **Authentication Middleware** – When either `AI_TICKET_AUTH_TOKENS` or `AI_TICKET_API_KEYS` is set, every request to application endpoints must present a matching bearer token (`Authorization: Bearer <token>`) or API key (header defaults to `X-API-Key`). Health, liveness, readiness, and metrics endpoints remain publicly accessible for infrastructure probes.
+*   **Centralized Error Handling** – All exceptions are normalized into the `{ "error": ..., "details": ... }` envelope, making it easy for clients to reason about failures.
+*   **Metrics** – Prometheus counters and histograms are exposed on `/metrics`, instrumenting request totals and latencies by endpoint. You can scrape this endpoint directly or via an existing Prometheus Operator.
+*   **Probes** –
+    *   `GET /healthz` (alias `/health`) reports general service health.
+    *   `GET /readyz` surfaces readiness issues. It fails with `503` if required configuration is missing or if a shutdown has been requested.
+    *   `GET /livez` stays healthy while the worker is alive and not terminating.
+*   **Graceful Shutdown** – Gunicorn workers trap `SIGTERM`/`SIGINT`, mark themselves as shutting down, and cause `/livez`/`/readyz` to fail so that load balancers stop routing traffic before the worker exits.
+
+## Deployment Configuration Examples
+
+The following snippets demonstrate how to configure the new middleware, probes, and metrics in common deployment scenarios.
+
+### Docker Compose
+
+```yaml
+services:
+  ai_ticket:
+    build: .
+    environment:
+      KOBOLDCPP_API_URL: "http://koboldcpp:5001/api"
+      LOG_LEVEL: "INFO"
+      AI_TICKET_AUTH_TOKENS: "local-dev-token"
+      AI_TICKET_API_KEYS: "service-key-1,service-key-2"
+      AI_TICKET_API_KEY_HEADER: "X-Custom-Api-Key"
+    ports:
+      - "5000:5000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    command: >-
+      gunicorn --bind 0.0.0.0:5000 --workers 2 --timeout 120 src.ai_ticket.server:app
+```
+
+### Helm Values Snippet
+
+```yaml
+env:
+  KOBOLDCPP_API_URL: "http://koboldcpp.default.svc.cluster.local:5001/api"
+  LOG_LEVEL: "INFO"
+  AI_TICKET_AUTH_TOKENS: "prod-token-1,prod-token-2"
+  AI_TICKET_API_KEYS: "team-a-key,team-b-key"
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 15
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 15
+metrics:
+  serviceMonitor:
+    enabled: true
+    endpoints:
+      - path: /metrics
+        interval: 30s
+```
+
+These examples assume your Helm chart exposes generic `env`, `livenessProbe`, and `readinessProbe` values and optionally integrates with the Prometheus Operator via `ServiceMonitor` resources. Adjust field names to match your chart.
 
 ## Examples
 The `ai_ticket` service now exposes an HTTP endpoint to receive events. You can send a POST request with a JSON payload to `http://localhost:5000/event` when the service is running via Docker Compose.
