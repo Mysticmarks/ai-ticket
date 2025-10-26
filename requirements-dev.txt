@@ -3,4 +3,5 @@ black
 isort
 pytest
 pytest-mock
+pytest-cov
 Flask>=2.0

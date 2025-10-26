@@ -13,7 +13,7 @@ LOG_LEVEL_MAP = {
     "CRITICAL": logging.CRITICAL,
 }
 log_level = LOG_LEVEL_MAP.get(LOG_LEVEL_STR, logging.INFO)
-logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(message)s')  # pragma: no cover
 
 app = Flask(__name__)
 
@@ -46,7 +46,7 @@ def handle_event():
 def health_check():
     return jsonify({"status": "healthy"}), 200
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     port = int(os.environ.get("PORT", 5000))
     # Make sure to run with host='0.0.0.0' to be accessible from outside the container
     app.run(host="0.0.0.0", port=port)

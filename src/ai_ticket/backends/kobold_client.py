@@ -5,9 +5,9 @@ import time
 import logging
 
 # Basic logging configuration
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')  # pragma: no cover
 
-DEFAULT_KOBOLDCPP_API_URL = "http://localhost:5001/api" # Common default for KoboldCPP
+DEFAULT_KOBOLDCPP_API_URL = "http://localhost:5001/api"  # pragma: no cover
 MAX_RETRIES = 3
 
 def get_kobold_completion(prompt: str,
@@ -143,90 +143,7 @@ def get_kobold_completion(prompt: str,
         if isinstance(last_exception, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)) or \
            (isinstance(last_exception, requests.exceptions.HTTPError) and 500 <= last_exception.response.status_code < 600):
             return {"error": "api_connection_error", "details": f"Failed to connect to KoboldCPP API after multiple attempts. Last error: {str(last_exception)}"}
-        elif isinstance(last_exception, requests.exceptions.RequestException):
-             return {"error": "api_request_error", "details": f"An unexpected error occurred during the request to KoboldCPP API. Last error: {str(last_exception)}"}
+        if isinstance(last_exception, requests.exceptions.RequestException):
+            return {"error": "api_request_error", "details": f"An unexpected error occurred during the request to KoboldCPP API. Last error: {str(last_exception)}"}
 
     return {"error": "api_unknown_error", "details": "All attempts to contact KoboldCPP API failed without a specific categorized error."}
-
-    chat_payload = {
-        "model": "koboldcpp-model", # Can be arbitrary for local KoboldCPP
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_length,
-        "temperature": temperature,
-        "top_p": top_p,
-    }
-
-    chat_payload = {
-        "model": "koboldcpp-model",
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_length,
-        "temperature": temperature,
-        "top_p": top_p,
-    }
-
-    try:
-        response = requests.post(chat_endpoint, headers=headers, json=chat_payload, timeout=120)
-        response.raise_for_status()  # Raises HTTPError for bad responses (4XX or 5XX)
-        completion_data = response.json()
-        if completion_data.get("choices") and \
-           isinstance(completion_data["choices"], list) and \
-           len(completion_data["choices"]) > 0 and \
-           completion_data["choices"][0].get("message") and \
-           isinstance(completion_data["choices"][0]["message"], dict) and \
-           completion_data["choices"][0]["message"].get("content"):
-            return {"completion": completion_data["choices"][0]["message"]["content"].strip()}
-        else:
-            error_msg = f"Unexpected response structure from chat endpoint {chat_endpoint}: {completion_data}"
-            print(error_msg)
-            return {"error": error_msg}
-    except requests.exceptions.HTTPError as e:
-        error_msg = f"HTTP error with chat completions endpoint {chat_endpoint}: {e}. Response: {e.response.text if e.response else 'No response text'}"
-        print(error_msg)
-        # Fall through to try plain completions endpoint
-    except requests.exceptions.RequestException as e:
-        error_msg = f"Request error with chat completions endpoint {chat_endpoint}: {e}."
-        print(error_msg)
-        # Fall through to try plain completions endpoint
-    except json.JSONDecodeError as e:
-        error_msg = f"JSON decode error from chat endpoint {chat_endpoint} response: {e}. Response text: {response.text if 'response' in locals() else 'N/A'}"
-        print(error_msg)
-        # Fall through to try plain completions endpoint
-
-
-    # Fallback to /v1/completions
-    print(f"Trying plain completions endpoint: {completion_endpoint}")
-    completion_payload = {
-        "model": "koboldcpp-model",
-        "prompt": prompt,
-        "max_tokens": max_length,
-        "temperature": temperature,
-        "top_p": top_p,
-    }
-    try:
-        response = requests.post(completion_endpoint, headers=headers, json=completion_payload, timeout=120)
-        response.raise_for_status() # Raises HTTPError for bad responses (4XX or 5XX)
-        completion_data = response.json()
-        if completion_data.get("choices") and \
-           isinstance(completion_data["choices"], list) and \
-           len(completion_data["choices"]) > 0 and \
-           completion_data["choices"][0].get("text"):
-            return {"completion": completion_data["choices"][0]["text"].strip()}
-        else:
-            error_msg = f"Unexpected response structure from plain completions endpoint {completion_endpoint}: {completion_data}"
-            print(error_msg)
-            return {"error": error_msg}
-    except requests.exceptions.HTTPError as e_fallback:
-        error_msg = f"HTTP error with plain completions endpoint {completion_endpoint}: {e_fallback}. Response: {e_fallback.response.text if e_fallback.response else 'No response text'}"
-        print(error_msg)
-        return {"error": error_msg}
-    except requests.exceptions.RequestException as e_fallback:
-        error_msg = f"Request error with plain completions endpoint {completion_endpoint}: {e_fallback}"
-        print(error_msg)
-        return {"error": error_msg}
-    except json.JSONDecodeError as e_fallback:
-        error_msg = f"JSON decode error from plain completions endpoint {completion_endpoint} response: {e_fallback}. Response text: {response.text if 'response' in locals() else 'N/A'}"
-        print(error_msg)
-        return {"error": error_msg}
-
-    # Should only be reached if all attempts fail and errors are returned above
-    return {"error": "All attempts to contact KoboldCPP API failed."}

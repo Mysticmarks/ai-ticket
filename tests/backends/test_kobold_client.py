@@ -1,91 +1,203 @@
+from unittest.mock import MagicMock
+
 import pytest
-import os
-from unittest.mock import MagicMock, call # Using unittest.mock directly as pytest-mock just wraps it
+import requests
+import json
+
 from ai_ticket.backends import kobold_client
 
-@pytest.fixture
-def mock_requests_post(mocker): # pytest-mock provides 'mocker' fixture
-    return mocker.patch('requests.post')
 
-def test_get_kobold_completion_success_chat_completions(mock_requests_post):
+@pytest.fixture(autouse=True)
+def set_default_url(monkeypatch):
+    monkeypatch.setenv("KOBOLDCPP_API_URL", "http://localhost:5001/api")
+
+
+@pytest.fixture
+def mock_requests_post(mocker):
+    return mocker.patch("ai_ticket.backends.kobold_client.requests.post")
+
+
+@pytest.fixture
+def fast_sleep(mocker):
+    return mocker.patch("ai_ticket.backends.kobold_client.time.sleep")
+
+
+def _http_error(status_code: int, text: str = "error", headers: dict | None = None):
+    response = MagicMock()
+    response.status_code = status_code
+    response.text = text
+    response.headers = headers or {}
+    error = requests.exceptions.HTTPError(text)
+    error.response = response
+    return error
+
+
+def test_get_kobold_completion_success_chat(mock_requests_post):
     mock_response = MagicMock()
-    mock_response.status_code = 200
+    mock_response.raise_for_status.return_value = None
     mock_response.json.return_value = {
         "choices": [{"message": {"content": " Test completion "}}]
     }
     mock_requests_post.return_value = mock_response
 
-    completion = kobold_client.get_kobold_completion("Test prompt")
-    assert completion == "Test completion"
+    result = kobold_client.get_kobold_completion("Test prompt")
 
-    expected_url = "http://localhost:5001/api/v1/chat/completions"
+    assert result == {"completion": "Test completion"}
     mock_requests_post.assert_called_once()
-    args, kwargs = mock_requests_post.call_args
-    assert args[0] == expected_url
-    assert kwargs['json']['messages'][0]['content'] == "Test prompt"
+    url, = mock_requests_post.call_args[0]
+    assert url.endswith("/v1/chat/completions")
 
-def test_get_kobold_completion_success_plain_completions_fallback(mock_requests_post):
-    # Simulate chat endpoint failing, then plain endpoint succeeding
-    mock_chat_fail_response = MagicMock()
-    mock_chat_fail_response.raise_for_status.side_effect = requests.exceptions.HTTPError("Simulated HTTP Error")
 
-    mock_plain_success_response = MagicMock()
-    mock_plain_success_response.status_code = 200
-    mock_plain_success_response.json.return_value = {
-        "choices": [{"text": " Fallback completion "}]
-    }
-
-    # Configure responses for sequential calls
-    mock_requests_post.side_effect = [
-        mock_chat_fail_response,
-        mock_plain_success_response
+def test_get_kobold_completion_falls_back_to_plain_endpoint(mock_requests_post, fast_sleep):
+    chat_error_response = MagicMock()
+    chat_error_response.raise_for_status.side_effect = [
+        _http_error(500),
+        _http_error(500),
+        _http_error(500),
     ]
 
-    completion = kobold_client.get_kobold_completion("Test prompt for fallback")
-    assert completion == "Fallback completion"
+    plain_success_response = MagicMock()
+    plain_success_response.raise_for_status.return_value = None
+    plain_success_response.json.return_value = {
+        "choices": [{"text": " Plain completion "}]
+    }
 
-    assert mock_requests_post.call_count == 2
+    mock_requests_post.side_effect = [
+        chat_error_response,
+        chat_error_response,
+        chat_error_response,
+        plain_success_response,
+    ]
 
-    # Check first call (chat completions)
-    call_args_chat = mock_requests_post.call_args_list[0]
-    args_chat, kwargs_chat = call_args_chat
-    assert args_chat[0] == "http://localhost:5001/api/v1/chat/completions"
-    assert kwargs_chat['json']['messages'][0]['content'] == "Test prompt for fallback"
+    result = kobold_client.get_kobold_completion("Prompt needing fallback")
 
-    # Check second call (plain completions)
-    call_args_plain = mock_requests_post.call_args_list[1]
-    args_plain, kwargs_plain = call_args_plain
-    assert args_plain[0] == "http://localhost:5001/api/v1/completions"
-    assert kwargs_plain['json']['prompt'] == "Test prompt for fallback"
+    assert result == {"completion": "Plain completion"}
+    assert mock_requests_post.call_count == 4
+    urls = [call_args[0][0] for call_args in mock_requests_post.call_args_list]
+    assert urls.count("http://localhost:5001/api/v1/chat/completions") == 3
+    assert urls[-1] == "http://localhost:5001/api/v1/completions"
 
 
-def test_get_kobold_completion_all_fallbacks_fail(mock_requests_post):
-    mock_requests_post.side_effect = requests.exceptions.RequestException("Simulated network error")
+def test_get_kobold_completion_times_out_then_succeeds(mock_requests_post, fast_sleep):
+    timeout_error = requests.exceptions.Timeout("timeout")
 
-    completion = kobold_client.get_kobold_completion("Test prompt all fail")
-    assert completion is None
-    assert mock_requests_post.call_count == 2 # Both chat and plain endpoints were tried
+    chat_timeout_response = MagicMock()
+    chat_timeout_response.raise_for_status.side_effect = timeout_error
 
-def test_get_kobold_completion_custom_url(mock_requests_post, monkeypatch):
-    custom_url = "http://mykobold.ai:1234/customapi"
-    # Using monkeypatch from pytest to set environment variable
-    monkeypatch.setenv("KOBOLDCPP_API_URL", custom_url)
+    success_response = MagicMock()
+    success_response.raise_for_status.return_value = None
+    success_response.json.return_value = {
+        "choices": [{"message": {"content": " Recovered completion "}}]
+    }
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"choices": [{"message": {"content": "Custom URL works"}}]}
-    mock_requests_post.return_value = mock_response
+    mock_requests_post.side_effect = [
+        timeout_error,
+        timeout_error,
+        success_response,
+    ]
 
-    completion = kobold_client.get_kobold_completion("Test prompt custom URL")
-    assert completion == "Custom URL works"
+    result = kobold_client.get_kobold_completion("Retry prompt")
 
-    expected_url_chat = f"{custom_url.rstrip('/')}/v1/chat/completions"
-    mock_requests_post.assert_called_once()
-    args, kwargs = mock_requests_post.call_args
-    assert args[0] == expected_url_chat
+    assert result == {"completion": "Recovered completion"}
+    assert mock_requests_post.call_count == 3
 
-    # Clean up env var if necessary, though monkeypatch handles it for this test
+
+def test_get_kobold_completion_exhausts_retries(mock_requests_post, fast_sleep):
+    timeout_error = requests.exceptions.Timeout("timeout")
+    mock_requests_post.side_effect = [timeout_error] * 6
+
+    result = kobold_client.get_kobold_completion("Failing prompt")
+
+    assert result == {
+        "error": "api_connection_error",
+        "details": "Failed to connect to KoboldCPP API after multiple attempts. Last error: timeout",
+    }
+    assert mock_requests_post.call_count == 6
+
+
+def test_get_kobold_completion_configuration_error(monkeypatch):
     monkeypatch.delenv("KOBOLDCPP_API_URL", raising=False)
 
-# Need to import requests for the side_effect
-import requests
+    result = kobold_client.get_kobold_completion("Prompt")
+
+    assert result == {
+        "error": "configuration_error",
+        "details": "KOBOLDCPP_API_URL is not set.",
+    }
+
+
+def test_get_kobold_completion_auth_error(mock_requests_post):
+    auth_error = _http_error(401)
+    response = MagicMock()
+    response.raise_for_status.side_effect = auth_error
+    mock_requests_post.return_value = response
+
+    result = kobold_client.get_kobold_completion("Prompt")
+
+    assert result == {
+        "error": "api_authentication_error",
+        "details": "KoboldCPP API request failed due to authentication/authorization (chat endpoint). Status: 401",
+    }
+
+
+def test_get_kobold_completion_rate_limit_retry(mock_requests_post, fast_sleep):
+    rate_limit_error = _http_error(429, headers={"Retry-After": "2"})
+    first_response = MagicMock()
+    first_response.raise_for_status.side_effect = rate_limit_error
+
+    second_response = MagicMock()
+    second_response.raise_for_status.return_value = None
+    second_response.json.return_value = {
+        "choices": [{"message": {"content": " Final completion "}}]
+    }
+
+    mock_requests_post.side_effect = [first_response, second_response]
+
+    result = kobold_client.get_kobold_completion("Prompt")
+
+    assert result == {"completion": "Final completion"}
+    fast_sleep.assert_any_call(2)
+
+
+def test_get_kobold_completion_client_error(mock_requests_post):
+    client_error = _http_error(404, text="missing")
+    response = MagicMock()
+    response.raise_for_status.side_effect = client_error
+    mock_requests_post.return_value = response
+
+    result = kobold_client.get_kobold_completion("Prompt")
+
+    assert result["error"] == "api_client_error"
+    assert "Status: 404" in result["details"]
+
+
+def test_get_kobold_completion_json_decode_error(mock_requests_post):
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.side_effect = json.JSONDecodeError("msg", "doc", 0)
+    response.text = "invalid json"
+    mock_requests_post.return_value = response
+
+    result = kobold_client.get_kobold_completion("Prompt")
+
+    assert result["error"] == "api_response_format_error"
+    assert "Failed to decode JSON" in result["details"]
+
+
+def test_get_kobold_completion_structure_error(mock_requests_post):
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"choices": []}
+    mock_requests_post.return_value = response
+
+    result = kobold_client.get_kobold_completion("Prompt")
+
+    assert result["error"] == "api_response_structure_error"
+
+
+def test_get_kobold_completion_request_exception(mock_requests_post):
+    mock_requests_post.side_effect = [requests.exceptions.RequestException("boom")]
+
+    result = kobold_client.get_kobold_completion("Prompt")
+
+    assert result["error"] == "api_request_error"
