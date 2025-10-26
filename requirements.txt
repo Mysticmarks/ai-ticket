@@ -1,4 +1,4 @@
-python-dotenv
-requests
 Flask>=2.0
 gunicorn
+python-dotenv
+requests
