@@ -19,6 +19,8 @@ automation pipelines.
   prioritisation, exponential backoff, and structured error classification for transient and terminal failures.
 * **Container-first delivery** – the project ships with a production-ready `Dockerfile`, Compose descriptors, and a Gunicorn
   entrypoint for reliable deployment.
+* **Operator-focused CLI** – the bundled `ai-ticket` command provides accent-themed terminal controls for starting the
+  server, issuing prompts, and running health diagnostics with structured feedback.
 * **Observability via structured logging** – the Flask server and inference pipeline emit log records with consistent
   formatting and log levels that can be tuned through environment variables.
 * **Tests and CI/CD guard-rails** – pytest suites, static analysis, and Docker build validation run through GitHub Actions to
@@ -85,6 +87,24 @@ pip install -e .
 export KOBOLDCPP_API_URL=http://localhost:5001/api
 flask --app ai_ticket.server run --host 0.0.0.0 --port 5000
 ```
+
+### 4. Command-line interface
+
+The package installs an `ai-ticket` executable that wraps common operational tasks with an accent-tinted terminal interface.
+
+```bash
+# Submit a prompt to a running server
+ai-ticket prompt "Summarise open tickets" --server-url http://localhost:5000
+
+# Perform a health check with a custom accent colour
+ai-ticket health --accent violet --server-url http://localhost:5000
+
+# Launch the development server (Flask reloader optional)
+ai-ticket serve --reload
+```
+
+Use `ai-ticket --help` or `ai-ticket <command> --help` to explore additional options such as sampling parameters and
+theming controls.
 
 ## Configuration quick reference
 

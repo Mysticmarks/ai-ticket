@@ -10,9 +10,14 @@ setup(
     author_email='jmikedupont2@example.com',
     url='https://github.com/jmikedupont2/ai-ticket',
     install_requires=[
+        'Flask>=2.0',
+        'gunicorn',
         'python-dotenv',
-        'requests', # Ensure requests is listed here as it's used by kobold_client
+        'requests',
     ],
+    entry_points={
+        'console_scripts': ['ai-ticket=ai_ticket.cli:main'],
+    },
     classifiers=[
         'Programming Language :: Python :: 3',
         'License :: OSI Approved :: MIT License',
