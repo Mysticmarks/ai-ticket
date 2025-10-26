@@ -17,6 +17,8 @@ automation pipelines.
   strings or OpenAI-style message lists, and encapsulates the response contract shared by the HTTP API and the Python package.
 * **Resilient KoboldCPP integration** – `ai_ticket.backends.kobold_client.get_kobold_completion` performs endpoint
   prioritisation, exponential backoff, and structured error classification for transient and terminal failures.
+* **Asynchronous orchestration** – `ai_ticket.backends.kobold_client.async_get_kobold_completion` and the
+  `AsyncInferencePipeline` enable concurrent inference with cooperative cancellation and ordered response delivery.
 * **Container-first delivery** – the project ships with a production-ready `Dockerfile`, Compose descriptors, and a Gunicorn
   entrypoint for reliable deployment.
 * **Operator-focused CLI** – the bundled `ai-ticket` command provides accent-themed terminal controls for starting the
@@ -135,6 +137,7 @@ The near-term focus areas are documented to help contributors align on prioritie
 
 * [Architecture Decision Records](docs/adr/README.md)
 * [UI/UX strategy and keyboard shortcuts](docs/ui-ux-roadmap.md)
+* [Asynchronous pipeline usage](docs/async_pipeline.md)
 * [Contribution guidelines](CONTRIBUTING.md)
 
 ## Contributing

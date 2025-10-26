@@ -6,13 +6,11 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from ai_ticket.backends.kobold_client import (
-    KoboldCompletionResult,
-    get_kobold_completion,
-)
+from ai_ticket.backends.kobold_client import KoboldCompletionResult, get_kobold_completion
 
 from .prompt_extraction import PromptExtractionResult, extract_prompt
 from .validation import ValidationError
+from .common import validate_inference_event
 
 
 @dataclass(frozen=True)
@@ -35,29 +33,13 @@ class ErrorResponse:
 InferenceResponse = CompletionResponse | ErrorResponse
 
 
-def _validate_event(event_data: Mapping[str, Any]) -> str:
-    if not isinstance(event_data, Mapping):
-        raise ValidationError(
-            code="invalid_input_format",
-            message="Event data must be a mapping.",
-            status_code=400,
-        )
-    if "content" not in event_data:
-        raise ValidationError(
-            code="missing_content_field",
-            message="The 'content' field is required.",
-            status_code=400,
-        )
-    return "content"
-
-
 def on_event(event_data: Mapping[str, Any], *, logger: logging.Logger | None = None) -> InferenceResponse:
     """Handle inference events and return structured responses."""
 
     logger = logger or logging.getLogger(__name__)
 
     try:
-        content_key = _validate_event(event_data)
+        content_key = validate_inference_event(event_data)
         extraction: PromptExtractionResult = extract_prompt(event_data[content_key])
     except ValidationError as error:
         logger.warning("Inference event validation failed", extra={

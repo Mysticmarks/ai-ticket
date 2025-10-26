@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Final
 
+from .runtime.async_pipeline import AsyncInferencePipeline, PipelineResult
+
 
 _SYSTEM_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(```)?\s*{\s*\"messages\"\s*:\s*\[\s*{\s*\"role\"\s*:\s*\"system\"\s*,\s*\"content\"\s*:\s*\"You\s+are\s+(?P<name>[^,]+),",
@@ -32,4 +34,4 @@ def find_name(text: object) -> str | None:
     return extracted_name or None
 
 
-__all__ = ["find_name"]
+__all__ = ["find_name", "AsyncInferencePipeline", "PipelineResult"]
