@@ -1,232 +1,451 @@
-import os
-import requests
+"""Client utilities for interacting with a KoboldCPP-compatible API.
+
+This module exposes composable chat and completion clients that share a
+robust request pipeline featuring configurable retry/backoff logic.  Both
+streaming and asynchronous helpers are available for high-throughput
+scenarios, while the legacy :func:`get_kobold_completion` helper provides a
+simple string-based interface for existing callers.
+"""
+
+from __future__ import annotations
+
+import asyncio
 import json
-import time
 import logging
+import os
+import threading
+import time
+from contextlib import closing
+from dataclasses import dataclass
+from typing import Any, AsyncGenerator, Callable, Dict, Generator, Optional, TypeVar
 
-# Basic logging configuration
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+import requests
 
-DEFAULT_KOBOLDCPP_API_URL = "http://localhost:5001/api" # Common default for KoboldCPP
-MAX_RETRIES = 3
+DEFAULT_KOBOLDCPP_API_URL = "http://localhost:5001/api"
 
-def get_kobold_completion(prompt: str,
-                          kobold_url: str = None,
-                          max_length: int = 150,
-                          temperature: float = 0.7,
-                          top_p: float = 1.0
-                         ):
-    """
-    Fetches a text completion from a KoboldCPP API with retries and standardized error handling.
-    Tries OpenAI-compatible chat completions endpoint, then plain completions endpoint.
-    """
-    actual_kobold_url = kobold_url or os.getenv("KOBOLDCPP_API_URL")
-    if not actual_kobold_url:
-        logging.error("KOBOLDCPP_API_URL is not set.")
-        return {"error": "configuration_error", "details": "KOBOLDCPP_API_URL is not set."}
+logger = logging.getLogger(__name__)
 
-    # Ensure no trailing slash for proper endpoint joining
-    actual_kobold_url = actual_kobold_url.rstrip('/')
+T = TypeVar("T")
 
-    endpoints_payloads = [
-        (
-            f"{actual_kobold_url}/v1/chat/completions",
-            {
-                "model": "koboldcpp-model",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_length, "temperature": temperature, "top_p": top_p
-            },
-            lambda data: data.get("choices") and isinstance(data["choices"], list) and len(data["choices"]) > 0 and \
-                         data["choices"][0].get("message") and isinstance(data["choices"][0]["message"], dict) and \
-                         data["choices"][0]["message"].get("content"),
-            lambda data: data["choices"][0]["message"]["content"].strip(),
-            "chat"
-        ),
-        (
-            f"{actual_kobold_url}/v1/completions",
-            {
-                "model": "koboldcpp-model",
-                "prompt": prompt,
-                "max_tokens": max_length, "temperature": temperature, "top_p": top_p
-            },
-            lambda data: data.get("choices") and isinstance(data["choices"], list) and len(data["choices"]) > 0 and \
-                         data["choices"][0].get("text"),
-            lambda data: data["choices"][0]["text"].strip(),
-            "plain"
-        )
-    ]
 
-    headers = {"Content-Type": "application/json"}
-    last_exception = None
+@dataclass
+class RetryConfig:
+    """Configuration for retry/backoff behaviour."""
 
-    for endpoint_url, payload, validator, extractor, endpoint_type in endpoints_payloads:
-        logging.info(f"Attempting to contact KoboldCPP API via {endpoint_type} endpoint: {endpoint_url}")
-        for attempt in range(MAX_RETRIES):
+    max_attempts: int = 3
+    initial_delay: float = 0.5
+    max_delay: float = 10.0
+    backoff_multiplier: float = 2.0
+    timeout: int = 120
+    sleep: Callable[[float], None] = time.sleep
+
+
+class KoboldAPIError(RuntimeError):
+    """Base error raised for Kobold client failures."""
+
+
+class RetryableRequestError(KoboldAPIError):
+    """Raised when a request fails due to retryable transport issues."""
+
+
+class RequestFailureError(KoboldAPIError):
+    """Raised when a request fails due to a non-retryable transport issue."""
+
+
+class RetryableHTTPError(KoboldAPIError):
+    """Raised when the API responds with a retryable HTTP error."""
+
+    def __init__(self, response: requests.Response):
+        self.response = response
+        super().__init__(self._format_message(response))
+
+    @staticmethod
+    def _format_message(response: requests.Response) -> str:
+        body = (response.text or "")[:200]
+        return f"HTTP {response.status_code} response from {response.url}: {body}"
+
+
+class RetryAfterError(RetryableHTTPError):
+    """Retryable HTTP error that conveys an explicit retry-after delay."""
+
+    def __init__(self, response: requests.Response, wait_time: Optional[float]):
+        super().__init__(response)
+        self.wait_time = wait_time
+
+
+class NonRetryableHTTPError(KoboldAPIError):
+    """Raised when the API responds with a non-retryable HTTP error."""
+
+    def __init__(self, response: requests.Response):
+        self.response = response
+        super().__init__(self._format_message(response))
+
+    @staticmethod
+    def _format_message(response: requests.Response) -> str:
+        body = (response.text or "")[:200]
+        return f"HTTP {response.status_code} response from {response.url}: {body}"
+
+
+class InvalidResponseError(KoboldAPIError):
+    """Raised when the API returns JSON that cannot be interpreted."""
+
+
+class ConfigurationError(KoboldAPIError):
+    """Raised when the client cannot be configured correctly."""
+
+
+def _parse_retry_after(header_value: Optional[str]) -> Optional[float]:
+    if not header_value:
+        return None
+    try:
+        return float(header_value)
+    except (TypeError, ValueError):
+        return None
+
+class _RetryController:
+    """Simple retry manager implementing exponential backoff."""
+
+    def __init__(self, config: RetryConfig) -> None:
+        self.config = config
+
+    def _calculate_wait(self, attempt: int) -> float:
+        delay = self.config.initial_delay * (self.config.backoff_multiplier ** (attempt - 1))
+        return min(delay, self.config.max_delay)
+
+    def run(self, func: Callable[[], T]) -> T:
+        last_exception: Optional[Exception] = None
+        for attempt in range(1, self.config.max_attempts + 1):
             try:
-                response = requests.post(endpoint_url, headers=headers, json=payload, timeout=120)
-                response.raise_for_status()  # Raises HTTPError for bad responses (4XX or 5XX)
+                return func()
+            except RetryAfterError as exc:
+                last_exception = exc
+                if attempt >= self.config.max_attempts:
+                    raise
+                wait_time = exc.wait_time if exc.wait_time is not None else self._calculate_wait(attempt)
+                logger.warning(
+                    "Rate limited by KoboldCPP (attempt %s/%s). Retrying in %.2f seconds.",
+                    attempt,
+                    self.config.max_attempts,
+                    wait_time,
+                )
+                self.config.sleep(wait_time)
+            except (RetryableHTTPError, RetryableRequestError) as exc:
+                last_exception = exc
+                if attempt >= self.config.max_attempts:
+                    raise
+                wait_time = self._calculate_wait(attempt)
+                logger.warning(
+                    "Retryable error contacting KoboldCPP (attempt %s/%s): %s. Retrying in %.2f seconds.",
+                    attempt,
+                    self.config.max_attempts,
+                    exc,
+                    wait_time,
+                )
+                self.config.sleep(wait_time)
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("Retry controller exhausted without raising an error")
 
+
+class BaseKoboldClient:
+    """Shared functionality for Kobold chat and completion clients."""
+
+    endpoint_path: str
+
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        *,
+        session: Optional[requests.Session] = None,
+        retry_config: Optional[RetryConfig] = None,
+    ) -> None:
+        resolved_url = base_url or os.getenv("KOBOLDCPP_API_URL") or DEFAULT_KOBOLDCPP_API_URL
+        if not resolved_url:
+            raise ConfigurationError("KoboldCPP base URL is not configured")
+        self.base_url = resolved_url.rstrip("/")
+        self.session = session or requests.Session()
+        self.retry_config = retry_config or RetryConfig()
+        self._retry_controller = _RetryController(self.retry_config)
+
+    # ------------------------------------------------------------------
+    # Low-level HTTP helpers
+    # ------------------------------------------------------------------
+    def _post(self, payload: Dict[str, Any], *, stream: bool = False) -> requests.Response:
+        url = f"{self.base_url}{self.endpoint_path}"
+        headers = {"Content-Type": "application/json"}
+        logger.debug("POST %s payload keys: %s", url, list(payload.keys()))
+        try:
+            response = self.session.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=self.retry_config.timeout,
+                stream=stream,
+            )
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            raise RetryableRequestError(str(exc)) from exc
+        except requests.exceptions.RequestException as exc:
+            raise RequestFailureError(str(exc)) from exc
+
+        status = response.status_code
+        if status == 429:
+            wait_time = _parse_retry_after(response.headers.get("Retry-After"))
+            logger.warning("Rate limit encountered for %s; retrying in %s seconds", url, wait_time)
+            raise RetryAfterError(response, wait_time)
+        if 500 <= status < 600:
+            logger.warning("Server error %s from %s", status, url)
+            raise RetryableHTTPError(response)
+        if 400 <= status < 500:
+            logger.error("Client error %s from %s", status, url)
+            raise NonRetryableHTTPError(response)
+
+        return response
+
+    def _request_json(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        def _call() -> Dict[str, Any]:
+            response = self._post(payload)
+            with closing(response):
                 try:
-                    completion_data = response.json()
-                except json.JSONDecodeError as e:
-                    logging.error(f"JSON decode error from {endpoint_type} endpoint {endpoint_url}: {e}. Response text: {response.text[:100]}...")
-                    # Treat as a non-retryable error for this endpoint, try next endpoint or fail
-                    last_exception = e
-                    # This error type is specific enough to break retry for this endpoint
-                    return {"error": "api_response_format_error", "details": f"Failed to decode JSON response from KoboldCPP API ({endpoint_type} endpoint). Response text snippet: {response.text[:200]}"}
+                    return response.json()
+                except json.JSONDecodeError as exc:
+                    raise InvalidResponseError(
+                        f"Failed to decode JSON from {response.url}: {response.text[:200]}"
+                    ) from exc
+
+        return self._retry_controller.run(_call)
+
+    def _stream(self, payload: Dict[str, Any], parser: Callable[[Any], Optional[str]]) -> Generator[str, None, None]:
+        def _generator() -> Generator[str, None, None]:
+            response = self._retry_controller.run(lambda: self._post(payload, stream=True))
+            with closing(response):
+                for raw_line in response.iter_lines(decode_unicode=True):
+                    if not raw_line:
+                        continue
+                    cleaned = raw_line.strip()
+                    if not cleaned or cleaned in {"[DONE]", "data: [DONE]"}:
+                        continue
+                    if cleaned.startswith("data:"):
+                        cleaned = cleaned[5:].strip()
+                    try:
+                        parsed = json.loads(cleaned)
+                    except json.JSONDecodeError:
+                        parsed = cleaned
+                    piece = parser(parsed)
+                    if piece:
+                        yield piece
+
+        return _generator()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def build_payload(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> Dict[str, Any]:
+        raise NotImplementedError
+
+    def parse_response(self, data: Dict[str, Any]) -> str:
+        raise NotImplementedError
+
+    def complete(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int = 150,
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+    ) -> str:
+        payload = self.build_payload(
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        data = self._request_json(payload)
+        return self.parse_response(data).strip()
+
+    def stream(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int = 150,
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+    ) -> Generator[str, None, None]:
+        payload = self.build_payload(
+            prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        return self._stream(payload, self.parse_stream_chunk)
+
+    async def acomplete(self, *args: Any, **kwargs: Any) -> str:
+        return await asyncio.to_thread(self.complete, *args, **kwargs)
+
+    async def astream(self, *args: Any, **kwargs: Any) -> AsyncGenerator[str, None]:
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[Optional[str] | Exception] = asyncio.Queue()
+        sentinel = object()
+
+        def _producer() -> None:
+            try:
+                for chunk in self.stream(*args, **kwargs):
+                    asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
+            except Exception as exc:  # pragma: no cover - exercised in tests via controlled failure
+                asyncio.run_coroutine_threadsafe(queue.put(exc), loop).result()
+            finally:
+                asyncio.run_coroutine_threadsafe(queue.put(sentinel), loop).result()
+
+        threading.Thread(target=_producer, daemon=True).start()
+
+        while True:
+            item = await queue.get()
+            if item is sentinel:
+                break
+            if isinstance(item, Exception):
+                raise item
+            yield item  # type: ignore[misc]
+
+    def parse_stream_chunk(self, chunk: Any) -> Optional[str]:
+        raise NotImplementedError
 
 
-                if validator(completion_data):
-                    logging.info(f"Successfully received completion from {endpoint_type} endpoint.")
-                    return {"completion": extractor(completion_data)}
-                else:
-                    logging.error(f"Unexpected response structure from {endpoint_type} endpoint {endpoint_url}: {completion_data}")
-                    # Treat as a non-retryable error for this endpoint, try next endpoint or fail
-                    return {"error": "api_response_structure_error", "details": f"Unexpected JSON structure in KoboldCPP API response from {endpoint_type} endpoint. Data: {str(completion_data)[:200]}"}
+class KoboldChatClient(BaseKoboldClient):
+    endpoint_path = "/v1/chat/completions"
 
-            except requests.exceptions.HTTPError as e:
-                last_exception = e
-                status_code = e.response.status_code
-                logging.warning(f"HTTP error on attempt {attempt + 1}/{MAX_RETRIES} for {endpoint_type} endpoint {endpoint_url}: {e}. Status: {status_code}")
-                if status_code in [401, 403]:
-                    return {"error": "api_authentication_error", "details": f"KoboldCPP API request failed due to authentication/authorization ({endpoint_type} endpoint). Status: {status_code}"}
-                elif status_code == 429:
-                    retry_after_str = e.response.headers.get("Retry-After")
-                    wait_time = int(retry_after_str) if retry_after_str and retry_after_str.isdigit() else (1 * (2**attempt))
-                    logging.info(f"Rate limit hit (429). Retrying after {wait_time} seconds.")
-                    time.sleep(wait_time)
-                    # continue to next attempt
-                elif 400 <= status_code < 500: # Other client errors
-                    return {"error": "api_client_error", "details": f"KoboldCPP API request failed with client error ({endpoint_type} endpoint). Status: {status_code}, Response: {e.response.text[:200]}"}
-                elif 500 <= status_code < 600: # Server errors, retry
-                    if attempt < MAX_RETRIES - 1:
-                        wait_time = 1 * (2**attempt)
-                        logging.info(f"Server error ({status_code}). Retrying after {wait_time} seconds.")
-                        time.sleep(wait_time)
-                    else:
-                        logging.error(f"Server error ({status_code}) on final attempt for {endpoint_type} endpoint.")
-                        # Fall through to outer loop to try next endpoint or return final error
-                else: # Other HTTP errors, don't retry for this endpoint
-                    break # break from retry loop, try next endpoint
+    def build_payload(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> Dict[str, Any]:
+        return {
+            "model": "koboldcpp-model",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+        }
 
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-                last_exception = e
-                logging.warning(f"Connection/Timeout error on attempt {attempt + 1}/{MAX_RETRIES} for {endpoint_type} endpoint {endpoint_url}: {e}")
-                if attempt < MAX_RETRIES - 1:
-                    wait_time = 1 * (2**attempt)
-                    logging.info(f"Retrying after {wait_time} seconds.")
-                    time.sleep(wait_time)
-                else:
-                    logging.error(f"Connection/Timeout error on final attempt for {endpoint_type} endpoint.")
-                    # Fall through to outer loop to try next endpoint or return final error
+    def parse_response(self, data: Dict[str, Any]) -> str:
+        try:
+            choices = data["choices"]
+            message = choices[0]["message"]
+            content = message["content"]
+            return str(content)
+        except (KeyError, IndexError, TypeError) as exc:
+            raise InvalidResponseError(
+                "Unexpected response structure for chat completion"
+            ) from exc
 
-            except requests.exceptions.RequestException as e: # Catch other request-related errors
-                last_exception = e
-                logging.error(f"Unexpected request error for {endpoint_type} endpoint {endpoint_url}: {e}")
-                # Don't retry for unknown request errors for this endpoint, try next or fail
-                break # break from retry loop, try next endpoint
-
-        if isinstance(last_exception, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)) or \
-           (isinstance(last_exception, requests.exceptions.HTTPError) and 500 <= last_exception.response.status_code < 600):
-            # If this endpoint failed on retries for connection/timeout/5xx, continue to next endpoint
-            continue
-        elif last_exception: # For other errors that broke the retry loop for this endpoint
-            # If there was an error like 4xx (not 429), JSONDecode, or other RequestException,
-            # and it was returned, we shouldn't proceed to the next endpoint.
-            # The error should have been returned already.
-            # This path is more of a safeguard.
-            break
+    def parse_stream_chunk(self, chunk: Any) -> Optional[str]:
+        if isinstance(chunk, str):
+            return chunk
+        try:
+            choices = chunk.get("choices") or []
+            if not choices:
+                return None
+            delta = choices[0].get("delta") or {}
+            if "content" in delta:
+                return str(delta["content"])
+            message = choices[0].get("message") or {}
+            if "content" in message:
+                return str(message["content"])
+        except (AttributeError, IndexError, TypeError):
+            return None
+        return None
 
 
-    # If all endpoints and their retries failed
-    if last_exception:
-        if isinstance(last_exception, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)) or \
-           (isinstance(last_exception, requests.exceptions.HTTPError) and 500 <= last_exception.response.status_code < 600):
-            return {"error": "api_connection_error", "details": f"Failed to connect to KoboldCPP API after multiple attempts. Last error: {str(last_exception)}"}
-        elif isinstance(last_exception, requests.exceptions.RequestException):
-             return {"error": "api_request_error", "details": f"An unexpected error occurred during the request to KoboldCPP API. Last error: {str(last_exception)}"}
+class KoboldCompletionClient(BaseKoboldClient):
+    endpoint_path = "/v1/completions"
 
-    return {"error": "api_unknown_error", "details": "All attempts to contact KoboldCPP API failed without a specific categorized error."}
+    def build_payload(
+        self,
+        prompt: str,
+        *,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> Dict[str, Any]:
+        return {
+            "model": "koboldcpp-model",
+            "prompt": prompt,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+        }
 
-    chat_payload = {
-        "model": "koboldcpp-model", # Can be arbitrary for local KoboldCPP
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_length,
-        "temperature": temperature,
-        "top_p": top_p,
-    }
+    def parse_response(self, data: Dict[str, Any]) -> str:
+        try:
+            choices = data["choices"]
+            text = choices[0]["text"]
+            return str(text)
+        except (KeyError, IndexError, TypeError) as exc:
+            raise InvalidResponseError(
+                "Unexpected response structure for plain completion"
+            ) from exc
 
-    chat_payload = {
-        "model": "koboldcpp-model",
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_length,
-        "temperature": temperature,
-        "top_p": top_p,
-    }
+    def parse_stream_chunk(self, chunk: Any) -> Optional[str]:
+        if isinstance(chunk, str):
+            return chunk
+        try:
+            choices = chunk.get("choices") or []
+            if not choices:
+                return None
+            text = choices[0].get("text")
+            if text is not None:
+                return str(text)
+        except (AttributeError, IndexError, TypeError):
+            return None
+        return None
+
+
+def get_kobold_completion(
+    prompt: str,
+    *,
+    kobold_url: Optional[str] = None,
+    max_length: int = 150,
+    temperature: float = 0.7,
+    top_p: float = 1.0,
+    retry_config: Optional[RetryConfig] = None,
+) -> Dict[str, str]:
+    """Convenience helper that prefers the chat endpoint with plain fallback."""
 
     try:
-        response = requests.post(chat_endpoint, headers=headers, json=chat_payload, timeout=120)
-        response.raise_for_status()  # Raises HTTPError for bad responses (4XX or 5XX)
-        completion_data = response.json()
-        if completion_data.get("choices") and \
-           isinstance(completion_data["choices"], list) and \
-           len(completion_data["choices"]) > 0 and \
-           completion_data["choices"][0].get("message") and \
-           isinstance(completion_data["choices"][0]["message"], dict) and \
-           completion_data["choices"][0]["message"].get("content"):
-            return {"completion": completion_data["choices"][0]["message"]["content"].strip()}
-        else:
-            error_msg = f"Unexpected response structure from chat endpoint {chat_endpoint}: {completion_data}"
-            print(error_msg)
-            return {"error": error_msg}
-    except requests.exceptions.HTTPError as e:
-        error_msg = f"HTTP error with chat completions endpoint {chat_endpoint}: {e}. Response: {e.response.text if e.response else 'No response text'}"
-        print(error_msg)
-        # Fall through to try plain completions endpoint
-    except requests.exceptions.RequestException as e:
-        error_msg = f"Request error with chat completions endpoint {chat_endpoint}: {e}."
-        print(error_msg)
-        # Fall through to try plain completions endpoint
-    except json.JSONDecodeError as e:
-        error_msg = f"JSON decode error from chat endpoint {chat_endpoint} response: {e}. Response text: {response.text if 'response' in locals() else 'N/A'}"
-        print(error_msg)
-        # Fall through to try plain completions endpoint
+        chat_client = KoboldChatClient(kobold_url, retry_config=retry_config)
+        completion = chat_client.complete(
+            prompt,
+            max_tokens=max_length,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        return {"completion": completion}
+    except KoboldAPIError as chat_error:
+        logger.warning("Chat completions failed: %s", chat_error)
+    except Exception as chat_error:  # pragma: no cover - defensive logging of unexpected failures
+        logger.exception("Unexpected chat completion failure: %s", chat_error)
+        return {"error": "chat_completion_failure", "details": str(chat_error)}
 
-
-    # Fallback to /v1/completions
-    print(f"Trying plain completions endpoint: {completion_endpoint}")
-    completion_payload = {
-        "model": "koboldcpp-model",
-        "prompt": prompt,
-        "max_tokens": max_length,
-        "temperature": temperature,
-        "top_p": top_p,
-    }
     try:
-        response = requests.post(completion_endpoint, headers=headers, json=completion_payload, timeout=120)
-        response.raise_for_status() # Raises HTTPError for bad responses (4XX or 5XX)
-        completion_data = response.json()
-        if completion_data.get("choices") and \
-           isinstance(completion_data["choices"], list) and \
-           len(completion_data["choices"]) > 0 and \
-           completion_data["choices"][0].get("text"):
-            return {"completion": completion_data["choices"][0]["text"].strip()}
-        else:
-            error_msg = f"Unexpected response structure from plain completions endpoint {completion_endpoint}: {completion_data}"
-            print(error_msg)
-            return {"error": error_msg}
-    except requests.exceptions.HTTPError as e_fallback:
-        error_msg = f"HTTP error with plain completions endpoint {completion_endpoint}: {e_fallback}. Response: {e_fallback.response.text if e_fallback.response else 'No response text'}"
-        print(error_msg)
-        return {"error": error_msg}
-    except requests.exceptions.RequestException as e_fallback:
-        error_msg = f"Request error with plain completions endpoint {completion_endpoint}: {e_fallback}"
-        print(error_msg)
-        return {"error": error_msg}
-    except json.JSONDecodeError as e_fallback:
-        error_msg = f"JSON decode error from plain completions endpoint {completion_endpoint} response: {e_fallback}. Response text: {response.text if 'response' in locals() else 'N/A'}"
-        print(error_msg)
-        return {"error": error_msg}
-
-    # Should only be reached if all attempts fail and errors are returned above
-    return {"error": "All attempts to contact KoboldCPP API failed."}
+        completion_client = KoboldCompletionClient(kobold_url, retry_config=retry_config)
+        completion = completion_client.complete(
+            prompt,
+            max_tokens=max_length,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        return {"completion": completion}
+    except KoboldAPIError as completion_error:
+        logger.error("Completion endpoint failed: %s", completion_error)
+        return {"error": "completion_failure", "details": str(completion_error)}
+    except Exception as completion_error:  # pragma: no cover - defensive logging
+        logger.exception("Unexpected completion failure: %s", completion_error)
+        return {"error": "completion_failure", "details": str(completion_error)}

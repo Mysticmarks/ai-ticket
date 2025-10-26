@@ -1,6 +1,8 @@
+gunicorn
 flake8
 black
 isort
 pytest
 pytest-mock
+pytest-asyncio
 Flask>=2.0

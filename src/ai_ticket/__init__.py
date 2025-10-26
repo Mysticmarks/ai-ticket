@@ -1,15 +1,21 @@
+"""Utility helpers for the ai_ticket package."""
+
 import re
 
-pattern = r'(```)?\s*{\s*"messages"\s*:\s*\[\s*\{\s*"role"\s*:\s*"system"\s*,\s*\"content"\s*:\s*"You\s+are\s+(?P<name>[^,]+),.*'
+_NAME_PATTERN = re.compile(r"You\s+are\s+(?P<name>[^,\n]+)", re.IGNORECASE)
+
 
 def find_name(text):
-    if not text:
+    """Extract the assistant persona name from a structured prompt string."""
+
+    if not isinstance(text, str) or not text:
         return False
-    if not isinstance(text,str):
-        return False
-    match = re.match(pattern, text)
+
+    stripped = text.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        stripped = stripped[3:-3].strip()
+
+    match = _NAME_PATTERN.search(stripped)
     if match:
-        extracted_name = match.group(2)
-        return extracted_name
-    else:
-        return None
+        return match.group("name").strip()
+    return None

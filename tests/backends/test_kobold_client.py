@@ -1,91 +1,198 @@
+import asyncio
+import json
+from typing import Iterable
+from unittest.mock import Mock
+
 import pytest
-import os
-from unittest.mock import MagicMock, call # Using unittest.mock directly as pytest-mock just wraps it
-from ai_ticket.backends import kobold_client
+import requests
+
+from ai_ticket.backends.kobold_client import (
+    KoboldChatClient,
+    KoboldCompletionClient,
+    InvalidResponseError,
+    NonRetryableHTTPError,
+    RequestFailureError,
+    RetryConfig,
+    get_kobold_completion,
+)
+
+
+def make_response(
+    status_code: int,
+    *,
+    json_data: dict | None = None,
+    text: str = "",
+    headers: dict | None = None,
+    stream_chunks: Iterable[str] | None = None,
+):
+    response = Mock(spec=requests.Response)
+    response.status_code = status_code
+    response.text = text
+    response.headers = headers or {}
+    response.url = "http://kobold/api"
+    if json_data is not None:
+        response.json.return_value = json_data
+    else:
+        response.json.side_effect = json.JSONDecodeError("msg", "", 0)
+    if stream_chunks is None:
+        response.iter_lines.return_value = []
+    else:
+        response.iter_lines.return_value = list(stream_chunks)
+    response.close.return_value = None
+    return response
+
 
 @pytest.fixture
-def mock_requests_post(mocker): # pytest-mock provides 'mocker' fixture
-    return mocker.patch('requests.post')
-
-def test_get_kobold_completion_success_chat_completions(mock_requests_post):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "choices": [{"message": {"content": " Test completion "}}]
-    }
-    mock_requests_post.return_value = mock_response
-
-    completion = kobold_client.get_kobold_completion("Test prompt")
-    assert completion == "Test completion"
-
-    expected_url = "http://localhost:5001/api/v1/chat/completions"
-    mock_requests_post.assert_called_once()
-    args, kwargs = mock_requests_post.call_args
-    assert args[0] == expected_url
-    assert kwargs['json']['messages'][0]['content'] == "Test prompt"
-
-def test_get_kobold_completion_success_plain_completions_fallback(mock_requests_post):
-    # Simulate chat endpoint failing, then plain endpoint succeeding
-    mock_chat_fail_response = MagicMock()
-    mock_chat_fail_response.raise_for_status.side_effect = requests.exceptions.HTTPError("Simulated HTTP Error")
-
-    mock_plain_success_response = MagicMock()
-    mock_plain_success_response.status_code = 200
-    mock_plain_success_response.json.return_value = {
-        "choices": [{"text": " Fallback completion "}]
-    }
-
-    # Configure responses for sequential calls
-    mock_requests_post.side_effect = [
-        mock_chat_fail_response,
-        mock_plain_success_response
-    ]
-
-    completion = kobold_client.get_kobold_completion("Test prompt for fallback")
-    assert completion == "Fallback completion"
-
-    assert mock_requests_post.call_count == 2
-
-    # Check first call (chat completions)
-    call_args_chat = mock_requests_post.call_args_list[0]
-    args_chat, kwargs_chat = call_args_chat
-    assert args_chat[0] == "http://localhost:5001/api/v1/chat/completions"
-    assert kwargs_chat['json']['messages'][0]['content'] == "Test prompt for fallback"
-
-    # Check second call (plain completions)
-    call_args_plain = mock_requests_post.call_args_list[1]
-    args_plain, kwargs_plain = call_args_plain
-    assert args_plain[0] == "http://localhost:5001/api/v1/completions"
-    assert kwargs_plain['json']['prompt'] == "Test prompt for fallback"
+def retry_config():
+    return RetryConfig(max_attempts=3, sleep=lambda _: None)
 
 
-def test_get_kobold_completion_all_fallbacks_fail(mock_requests_post):
-    mock_requests_post.side_effect = requests.exceptions.RequestException("Simulated network error")
+def test_chat_client_complete_success(retry_config):
+    session = Mock(spec=requests.Session)
+    response = make_response(
+        200,
+        json_data={"choices": [{"message": {"content": " Hello world "}}]},
+    )
+    session.post.return_value = response
 
-    completion = kobold_client.get_kobold_completion("Test prompt all fail")
-    assert completion is None
-    assert mock_requests_post.call_count == 2 # Both chat and plain endpoints were tried
+    client = KoboldChatClient("http://localhost:5001/api", session=session, retry_config=retry_config)
+    result = client.complete("Say hello")
+    assert result == "Hello world"
+    session.post.assert_called_once()
 
-def test_get_kobold_completion_custom_url(mock_requests_post, monkeypatch):
-    custom_url = "http://mykobold.ai:1234/customapi"
-    # Using monkeypatch from pytest to set environment variable
-    monkeypatch.setenv("KOBOLDCPP_API_URL", custom_url)
 
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {"choices": [{"message": {"content": "Custom URL works"}}]}
-    mock_requests_post.return_value = mock_response
+def test_completion_client_streaming_success(retry_config):
+    session = Mock(spec=requests.Session)
+    response = make_response(
+        200,
+        json_data={"choices": [{"text": "unused"}]},
+        stream_chunks=[
+            "data: {\"choices\":[{\"text\":\"Hello\"}]}",
+            "data: {\"choices\":[{\"text\":\" world\"}]}",
+            "data: [DONE]",
+        ],
+    )
+    session.post.return_value = response
 
-    completion = kobold_client.get_kobold_completion("Test prompt custom URL")
-    assert completion == "Custom URL works"
+    client = KoboldCompletionClient("http://localhost:5001/api", session=session, retry_config=retry_config)
+    pieces = list(client.stream("Hi"))
+    assert pieces == ["Hello", " world"]
 
-    expected_url_chat = f"{custom_url.rstrip('/')}/v1/chat/completions"
-    mock_requests_post.assert_called_once()
-    args, kwargs = mock_requests_post.call_args
-    assert args[0] == expected_url_chat
 
-    # Clean up env var if necessary, though monkeypatch handles it for this test
-    monkeypatch.delenv("KOBOLDCPP_API_URL", raising=False)
+def test_async_chat_stream(retry_config):
+    session = Mock(spec=requests.Session)
+    response = make_response(
+        200,
+        json_data={"choices": [{"message": {"content": "ignored"}}]},
+        stream_chunks=[
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Chunk\"}}]}",
+            "data: {\"choices\":[{\"delta\":{\"content\":\" two\"}}]}",
+            "data: [DONE]",
+        ],
+    )
+    session.post.return_value = response
 
-# Need to import requests for the side_effect
-import requests
+    client = KoboldChatClient("http://localhost:5001/api", session=session, retry_config=retry_config)
+
+    async def collect() -> list[str]:
+        chunks = []
+        async for chunk in client.astream("prompt"):
+            chunks.append(chunk)
+        return chunks
+
+    collected = asyncio.run(collect())
+    assert collected == ["Chunk", " two"]
+
+
+def test_invalid_response_raises(retry_config):
+    session = Mock(spec=requests.Session)
+    response = make_response(200, json_data=None, text="not-json")
+    session.post.return_value = response
+
+    client = KoboldChatClient("http://localhost:5001/api", session=session, retry_config=retry_config)
+    with pytest.raises(InvalidResponseError):
+        client.complete("prompt")
+
+
+def test_non_retryable_client_error(retry_config):
+    session = Mock(spec=requests.Session)
+    response = make_response(403, json_data={"error": "Forbidden"}, text="Forbidden")
+    session.post.return_value = response
+
+    client = KoboldChatClient("http://localhost:5001/api", session=session, retry_config=retry_config)
+    with pytest.raises(NonRetryableHTTPError):
+        client.complete("prompt")
+
+
+def test_retry_on_server_error_then_success(retry_config):
+    session = Mock(spec=requests.Session)
+    server_error = make_response(500, json_data={"error": "boom"}, text="boom")
+    success = make_response(
+        200,
+        json_data={"choices": [{"message": {"content": "ok"}}]},
+    )
+    session.post.side_effect = [server_error, success]
+
+    client = KoboldChatClient("http://localhost:5001/api", session=session, retry_config=retry_config)
+    assert client.complete("prompt") == "ok"
+    assert session.post.call_count == 2
+
+
+def test_retry_after_header_used(retry_config):
+    session = Mock(spec=requests.Session)
+    rate_limited = make_response(429, json_data={"error": "rate"}, headers={"Retry-After": "0"})
+    success = make_response(
+        200,
+        json_data={"choices": [{"message": {"content": "ok"}}]},
+    )
+    session.post.side_effect = [rate_limited, success]
+
+    client = KoboldChatClient("http://localhost:5001/api", session=session, retry_config=retry_config)
+    assert client.complete("prompt") == "ok"
+    assert session.post.call_count == 2
+
+
+def test_transport_error_wrapped(retry_config):
+    session = Mock(spec=requests.Session)
+    session.post.side_effect = requests.exceptions.RequestException("boom")
+
+    client = KoboldChatClient("http://localhost:5001/api", session=session, retry_config=retry_config)
+    with pytest.raises(RequestFailureError):
+        client.complete("prompt")
+
+
+def test_get_kobold_completion_fallback(monkeypatch):
+    server_error = make_response(500, json_data={"error": "boom"}, text="boom")
+    success = make_response(200, json_data={"choices": [{"text": "fallback"}]})
+
+    post = Mock()
+    post.side_effect = [server_error, server_error, success]
+    monkeypatch.setattr(requests.Session, "post", post)
+
+    result = get_kobold_completion("prompt", retry_config=RetryConfig(max_attempts=2, sleep=lambda _: None))
+    assert result == {"completion": "fallback"}
+    assert post.call_count == 3
+
+
+def test_get_kobold_completion_failure(monkeypatch):
+    server_error = make_response(500, json_data={"error": "boom"}, text="boom")
+    client_error = make_response(400, json_data={"error": "bad"}, text="bad")
+
+    post = Mock()
+    post.side_effect = [server_error, server_error, client_error]
+    monkeypatch.setattr(requests.Session, "post", post)
+
+    result = get_kobold_completion("prompt", retry_config=RetryConfig(max_attempts=2, sleep=lambda _: None))
+    assert result["error"] == "completion_failure"
+    assert post.call_count == 3
+
+
+def test_retryable_transport_error_then_success(retry_config):
+    session = Mock(spec=requests.Session)
+    timeout = requests.exceptions.Timeout("timeout")
+    success = make_response(200, json_data={"choices": [{"message": {"content": "ok"}}]})
+    session.post.side_effect = [timeout, success]
+
+    client = KoboldChatClient("http://localhost:5001/api", session=session, retry_config=retry_config)
+    assert client.complete("prompt") == "ok"
+    assert session.post.call_count == 2

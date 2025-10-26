@@ -11,7 +11,7 @@ setup(
     url='https://github.com/jmikedupont2/ai-ticket',
     install_requires=[
         'python-dotenv',
-        'requests', # Ensure requests is listed here as it's used by kobold_client
+        'requests',
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
