@@ -163,6 +163,8 @@ cython_debug/
 
 # Docker specific
 docker-compose.override.yml
+ops/certs/
+ops/secrets/ai_ticket_auth_token.txt
 
 # OS-specific files
 .DS_Store

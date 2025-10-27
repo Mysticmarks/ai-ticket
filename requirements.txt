@@ -2,3 +2,4 @@ Flask>=2.0
 gunicorn
 python-dotenv
 requests
+prometheus-client
