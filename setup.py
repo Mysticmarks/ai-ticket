@@ -5,6 +5,7 @@ setup(
     version='0.1.0',
     packages=find_packages(where='src'),
     package_dir={'': 'src'},
+    include_package_data=True,
     description='AI Ticket system to handle AI interactions with tickets.',
     author='jmikedupont2',
     author_email='jmikedupont2@example.com',
@@ -24,4 +25,5 @@ setup(
         'Operating System :: OS Independent',
     ],
     python_requires='>=3.10',
+    zip_safe=False,
 )

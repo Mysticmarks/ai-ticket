@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">AI Ticket Dashboard Icon</title>
+  <desc id="desc">Stylised ticket with neural network nodes</desc>
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4cc9f0" />
+      <stop offset="100%" stop-color="#7209b7" />
+    </linearGradient>
+  </defs>
+  <rect x="12" y="24" width="104" height="80" rx="16" fill="url(#grad)" />
+  <path d="M28 52h72M28 76h48" stroke="#f1f5f9" stroke-width="6" stroke-linecap="round" />
+  <circle cx="92" cy="76" r="10" fill="#f1f5f9" />
+  <circle cx="80" cy="64" r="6" fill="#f1f5f9" />
+  <circle cx="104" cy="64" r="6" fill="#f1f5f9" />
+  <path d="M80 64l12 12 12-12" stroke="#1d2433" stroke-width="4" stroke-linejoin="round" fill="none" />
+</svg>

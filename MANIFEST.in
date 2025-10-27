@@ -1,0 +1,7 @@
+recursive-include src/ai_ticket/ui/dist *
+recursive-include src/ai_ticket/ui/public *
+recursive-include src/ai_ticket/ui/src *
+include src/ai_ticket/ui/index.html
+include src/ai_ticket/ui/package.json
+include src/ai_ticket/ui/tsconfig.json
+include src/ai_ticket/ui/vite.config.ts

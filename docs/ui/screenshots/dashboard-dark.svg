@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">AI Ticket Dashboard - Dark Theme</title>
+  <desc id="desc">Mocked screenshot illustration of the AI Ticket dashboard layout.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111827" />
+      <stop offset="1" stop-color="#0f172a" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38bdf8" />
+      <stop offset="1" stop-color="#a855f7" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#020617" flood-opacity="0.5" />
+    </filter>
+  </defs>
+  <rect width="1280" height="720" fill="url(#bg)" />
+  <rect x="72" y="48" width="1136" height="96" rx="24" fill="#111a2f" stroke="#1e293b" stroke-width="2" filter="url(#shadow)" />
+  <circle cx="132" cy="96" r="28" fill="url(#accent)" />
+  <text x="192" y="108" fill="#e2e8f0" font-family="'Inter', sans-serif" font-size="36" letter-spacing="4">AI Ticket Operations</text>
+  <rect x="960" y="78" width="208" height="32" rx="16" fill="#1e293b" stroke="#334155" />
+  <text x="974" y="101" fill="#94a3b8" font-size="18" font-family="'Inter', sans-serif">Hue: 210°</text>
+  <g transform="translate(72 176)">
+    <g>
+      <rect width="720" height="240" rx="28" fill="#111a2f" stroke="#1e293b" stroke-width="2" filter="url(#shadow)" />
+      <text x="48" y="60" fill="#38bdf8" font-size="22" letter-spacing="6" font-family="'Inter', sans-serif">REALTIME METRICS</text>
+      <g transform="translate(48 96)">
+        <g>
+          <rect width="144" height="112" rx="20" fill="#0f172a" stroke="#27364d" />
+          <text x="18" y="32" fill="#94a3b8" font-size="14">Total</text>
+          <text x="18" y="78" fill="#f8fafc" font-size="36" font-weight="600">128</text>
+        </g>
+        <g transform="translate(168 0)">
+          <rect width="144" height="112" rx="20" fill="#0f172a" stroke="#27364d" />
+          <text x="18" y="32" fill="#94a3b8" font-size="14">Success %</text>
+          <text x="18" y="78" fill="#f8fafc" font-size="36" font-weight="600">96%</text>
+        </g>
+        <g transform="translate(336 0)">
+          <rect width="144" height="112" rx="20" fill="#0f172a" stroke="#27364d" />
+          <text x="18" y="32" fill="#94a3b8" font-size="14">Latency</text>
+          <text x="18" y="78" fill="#f8fafc" font-size="28" font-weight="600">420ms / 820ms</text>
+        </g>
+        <g transform="translate(504 0)">
+          <rect width="144" height="112" rx="20" fill="#0f172a" stroke="#27364d" />
+          <text x="18" y="32" fill="#94a3b8" font-size="14">Throughput</text>
+          <text x="18" y="78" fill="#f8fafc" font-size="28" font-weight="600">48/min</text>
+        </g>
+      </g>
+      <g transform="translate(48 224)">
+        <rect width="624" height="40" rx="20" fill="#0f172a" stroke="#1e293b" />
+        <g transform="translate(12 8)">
+          <rect width="8" height="24" rx="4" fill="url(#accent)" />
+          <rect x="16" width="8" height="32" rx="4" fill="url(#accent)" opacity="0.8" />
+          <rect x="32" width="8" height="18" rx="4" fill="url(#accent)" opacity="0.6" />
+          <rect x="48" width="8" height="28" rx="4" fill="url(#accent)" opacity="0.9" />
+          <rect x="64" width="8" height="20" rx="4" fill="url(#accent)" opacity="0.7" />
+        </g>
+      </g>
+    </g>
+    <g transform="translate(760 0)">
+      <rect width="344" height="240" rx="28" fill="#111a2f" stroke="#1e293b" stroke-width="2" filter="url(#shadow)" />
+      <text x="40" y="60" fill="#a855f7" font-size="22" letter-spacing="6" font-family="'Inter', sans-serif">SYSTEM STATUS</text>
+      <g transform="translate(40 96)">
+        <rect width="264" height="56" rx="18" fill="#0f172a" stroke="#27364d" />
+        <text x="24" y="34" fill="#94a3b8" font-size="16">Inference Backend — Online</text>
+      </g>
+      <g transform="translate(40 164)">
+        <rect width="264" height="56" rx="18" fill="#0f172a" stroke="#27364d" />
+        <text x="24" y="34" fill="#94a3b8" font-size="16">Latency Watch — Degraded</text>
+      </g>
+    </g>
+    <g transform="translate(0 272)">
+      <rect width="1104" height="192" rx="28" fill="#111a2f" stroke="#1e293b" stroke-width="2" filter="url(#shadow)" />
+      <text x="48" y="60" fill="#38bdf8" font-size="22" letter-spacing="6" font-family="'Inter', sans-serif">RECENT ERRORS</text>
+      <text x="48" y="112" fill="#94a3b8" font-size="18" font-family="'Inter', sans-serif">No errors reported in the last 15 minutes.</text>
+    </g>
+  </g>
+</svg>
