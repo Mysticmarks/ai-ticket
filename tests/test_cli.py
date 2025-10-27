@@ -1,86 +1,78 @@
 from __future__ import annotations
 
-import json
-from typing import Any
-from unittest.mock import patch
+import argparse
+from unittest import mock
 
 import pytest
 
 from ai_ticket import cli
 
 
-class MockResponse:
-    def __init__(self, *, status_code: int, json_data: Any = None, text: str = "") -> None:
-        self.status_code = status_code
-        self._json_data = json_data
-        self.text = text
-
-    def json(self) -> Any:
-        if isinstance(self._json_data, Exception):
-            raise self._json_data
-        return self._json_data
-
-
-def test_prompt_success(capsys: pytest.CaptureFixture[str]) -> None:
-    response = MockResponse(status_code=200, json_data={"completion": "All tickets resolved."})
-    with patch("requests.post", return_value=response) as mock_post:
-        exit_code = cli.main(["prompt", "Resolve tickets"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert mock_post.called
-    assert "Completion" in captured.out
-    assert "All tickets resolved." in captured.out
+def _make_args(**overrides: object) -> argparse.Namespace:
+    defaults: dict[str, object] = {
+        "host": "0.0.0.0",
+        "port": 5000,
+        "reload": False,
+        "workers": 2,
+        "worker_class": "gthread",
+        "threads": 4,
+        "timeout": 30,
+        "keepalive": 5,
+        "graceful_timeout": 30,
+        "access_log": "-",
+        "error_log": "-",
+    }
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
 
 
-def test_prompt_backend_error(capsys: pytest.CaptureFixture[str]) -> None:
-    response = MockResponse(status_code=502, json_data={"error": "backend_error", "message": "Failed"})
-    with patch("requests.post", return_value=response):
-        exit_code = cli.main(["prompt", "Hello there"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "Service returned 502" in captured.out
+@pytest.fixture()
+def cli_context() -> cli._CLIContext:  # type: ignore[attr-defined]
+    return cli._CLIContext(accent="cyan")  # type: ignore[attr-defined]
 
 
-def test_prompt_invalid_json(capsys: pytest.CaptureFixture[str]) -> None:
-    response = MockResponse(status_code=200, json_data=json.JSONDecodeError("x", "y", 0))
-    with patch("requests.post", return_value=response):
-        exit_code = cli.main(["prompt", "Test"])
+def test_serve_command_runs_gunicorn_by_default(mocker, cli_context) -> None:
+    mocker.patch("ai_ticket.cli._print_panel")
+    flask_app = mock.Mock()
+    mocker.patch("ai_ticket.cli._load_flask_app", return_value=flask_app)
+    run_with_gunicorn = mocker.patch("ai_ticket.cli._run_with_gunicorn")
 
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "Invalid JSON" in captured.out
+    args = _make_args()
 
+    result = cli._serve_command(args, cli_context)  # type: ignore[attr-defined]
 
-def test_health_success(capsys: pytest.CaptureFixture[str]) -> None:
-    response = MockResponse(status_code=200, json_data={"status": "healthy"})
-    with patch("requests.get", return_value=response) as mock_get:
-        exit_code = cli.main(["health"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert mock_get.called
-    assert "HTTP 200" in captured.out
-    assert "healthy" in captured.out
+    assert result == 0
+    run_with_gunicorn.assert_called_once()
+    call_app, options = run_with_gunicorn.call_args[0]
+    assert call_app is flask_app
+    assert options["bind"] == "0.0.0.0:5000"
+    assert options["workers"] == args.workers
+    assert options["worker_class"] == args.worker_class
 
 
-def test_health_failure(capsys: pytest.CaptureFixture[str]) -> None:
-    response = MockResponse(status_code=503, json_data={"status": "degraded"})
-    with patch("requests.get", return_value=response):
-        exit_code = cli.main(["health"])
+def test_serve_command_uses_flask_reloader_when_requested(mocker, cli_context) -> None:
+    mocker.patch("ai_ticket.cli._print_panel")
+    flask_app = mock.Mock()
+    mocker.patch("ai_ticket.cli._load_flask_app", return_value=flask_app)
+    run_with_flask = mocker.patch("ai_ticket.cli._run_with_flask_reload")
+    run_with_gunicorn = mocker.patch("ai_ticket.cli._run_with_gunicorn")
 
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "HTTP 503" in captured.out
-    assert "degraded" in captured.out
+    args = _make_args(reload=True, host="127.0.0.1", port=9000)
+
+    result = cli._serve_command(args, cli_context)  # type: ignore[attr-defined]
+
+    assert result == 0
+    run_with_flask.assert_called_once_with(flask_app, "127.0.0.1", 9000)
+    run_with_gunicorn.assert_not_called()
 
 
-def test_health_json_error(capsys: pytest.CaptureFixture[str]) -> None:
-    response = MockResponse(status_code=200, json_data=json.JSONDecodeError("err", "doc", 0), text="oops")
-    with patch("requests.get", return_value=response):
-        exit_code = cli.main(["health"])
+def test_serve_command_reports_missing_gunicorn(mocker, cli_context) -> None:
+    mocker.patch("ai_ticket.cli._print_panel")
+    mocker.patch("ai_ticket.cli._load_flask_app", return_value=mock.Mock())
+    mocker.patch("ai_ticket.cli._run_with_gunicorn", side_effect=ImportError("gunicorn"))
 
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "oops" in captured.out
+    args = _make_args()
+
+    result = cli._serve_command(args, cli_context)  # type: ignore[attr-defined]
+
+    assert result == 1

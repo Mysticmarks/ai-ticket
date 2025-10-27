@@ -7,6 +7,9 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from werkzeug.test import Client as WerkzeugClient
+from werkzeug.wrappers import Response as WerkzeugResponse
+
 import requests
 
 
@@ -95,6 +98,51 @@ def json_encode(data: Any) -> bytes:
     return json.dumps(data).encode()
 
 
+class WSGITransport:
+    def __init__(self, *, app: Any) -> None:
+        self.app = app
+
+
+class Client:
+    def __init__(self, *, transport: WSGITransport | None = None, base_url: str | None = None) -> None:
+        if transport is None:
+            raise ValueError("WSGITransport is required when using the lightweight httpx shim")
+        self._transport = transport
+        self._base_url = (base_url or "").rstrip("/")
+        self._client = WerkzeugClient(transport.app, response_wrapper=WerkzeugResponse)
+
+    def __enter__(self) -> Client:
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def post(
+        self,
+        url: str,
+        *,
+        json: Any | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> Response:
+        path = url if url.startswith("/") else f"/{url}"
+        werkzeug_response = self._client.post(path, json=json, headers=headers or {})
+        try:
+            payload = werkzeug_response.get_json()
+        except Exception:  # pragma: no cover - depends on Flask internals
+            payload = None
+
+        request = Request("POST", f"{self._base_url}{path}")
+        return Response(
+            werkzeug_response.status_code,
+            content=werkzeug_response.get_data(),
+            json=payload,
+            request=request,
+        )
+
+    def close(self) -> None:  # pragma: no cover - compatibility shim
+        return None
+
+
 class AsyncClient:
     def __init__(self, *, limits: Limits | None = None, timeout: float | None = None) -> None:
         self._session = requests.Session()
@@ -142,10 +190,12 @@ class AsyncClient:
 
 
 __all__ = [
+    "Client",
     "AsyncClient",
     "Limits",
     "Request",
     "Response",
+    "WSGITransport",
     "HTTPError",
     "HTTPStatusError",
     "RequestError",
