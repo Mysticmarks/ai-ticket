@@ -129,12 +129,15 @@ ai-ticket prompt "Summarise open tickets" --server-url http://localhost:5000
 # Perform a health check with a custom accent colour
 ai-ticket health --accent violet --server-url http://localhost:5000
 
-# Launch the development server (Flask reloader optional)
+# Launch the production server (Gunicorn with threaded workers by default)
+ai-ticket serve --workers 4 --threads 8
+
+# Launch the development server with Flask's auto-reloader
 ai-ticket serve --reload
 ```
 
-Use `ai-ticket --help` or `ai-ticket <command> --help` to explore additional options such as sampling parameters and
-theming controls.
+Use `ai-ticket --help` or `ai-ticket <command> --help` to explore additional options such as sampling parameters,
+worker classes, and theming controls.
 
 ## Configuration quick reference
 
@@ -142,7 +145,7 @@ theming controls.
 |--------------------------------|-----------------------------|-----------------------------------------------------------------------------|
 | `KOBOLDCPP_API_URL`            | `http://localhost:5001/api` | Target KoboldCPP-compatible inference endpoint.                             |
 | `LOG_LEVEL`                    | `INFO`                      | Python logging level (`DEBUG`, `INFO`, `WARNING`, ...).                     |
-| `PORT`                         | `5000`                      | Port used by the Flask development server (not Gunicorn).                   |
+| `PORT`                         | `5000`                      | Default port used by the CLI and Flask development server.                   |
 | `AI_TICKET_AUTH_TOKEN`         | _unset_                     | Comma-separated bearer tokens accepted by the `/event` endpoint.           |
 | `AI_TICKET_AUTH_TOKEN_FILE`    | _unset_                     | Path to newline-delimited bearer tokens (set automatically via Docker secret). |
 | `RATE_LIMIT_REQUESTS`          | `120`                       | Requests allowed per client within a window.                                |
@@ -156,11 +159,13 @@ theming controls.
 
 The near-term focus areas are documented to help contributors align on priorities:
 
-* **UI/UX extension** – design and implement a thin management console for prompt history and system health (see
+* **Dashboard deepening** – extend the shipped SPA with prompt history, keyboard shortcut overlays, and admin controls (see
   [UI/UX notes](docs/ui-ux-roadmap.md)).
 * **Backend pluggability** – introduce a provider interface to support multiple LLM backends alongside KoboldCPP.
-* **Observability** – add structured metrics export (e.g., Prometheus) and trace correlation IDs for multi-service chains.
+* **Shared state services** – move authentication, rate limiting, and metrics aggregation to persistent stores to enable
+  horizontal scaling.
 * **Load & soak testing** – automate performance regression tests for key workloads to validate retry budgets and error paths.
+* **Release automation** – codify a packaging and changelog pipeline so operators can track and deploy tagged builds reliably.
 
 ## Repository hygiene
 
