@@ -23,8 +23,8 @@ automation pipelines.
   entrypoint for reliable deployment.
 * **Operator-focused CLI** – the bundled `ai-ticket` command provides accent-themed terminal controls for starting the
   server, issuing prompts, and running health diagnostics with structured feedback.
-* **Observability via structured logging** – the Flask server and inference pipeline emit log records with consistent
-  formatting and log levels that can be tuned through environment variables.
+* **Observability via structured logging and telemetry** – the Flask server, async pipeline, and KoboldCPP client emit
+  OpenTelemetry spans, Prometheus metrics, and log records that can be tuned through environment variables.
 * **Tests and CI/CD guard-rails** – pytest suites, static analysis, and Docker build validation run through GitHub Actions to
   catch regressions early.
 
@@ -110,11 +110,15 @@ theming controls.
 
 ## Configuration quick reference
 
-| Variable            | Default                     | Description                                                  |
-|---------------------|-----------------------------|--------------------------------------------------------------|
-| `KOBOLDCPP_API_URL` | `http://localhost:5001/api` | Target KoboldCPP-compatible inference endpoint.              |
-| `LOG_LEVEL`         | `INFO`                      | Python logging level (`DEBUG`, `INFO`, `WARNING`, ...).      |
-| `PORT`              | `5000`                      | Port used by the Flask development server (not Gunicorn).    |
+| Variable                      | Default                     | Description                                                          |
+|-------------------------------|-----------------------------|----------------------------------------------------------------------|
+| `KOBOLDCPP_API_URL`           | `http://localhost:5001/api` | Target KoboldCPP-compatible inference endpoint.                      |
+| `LOG_LEVEL`                   | `INFO`                      | Python logging level (`DEBUG`, `INFO`, `WARNING`, ...).              |
+| `PORT`                        | `5000`                      | Port used by the Flask development server (not Gunicorn).            |
+| `OTEL_SERVICE_NAME`           | `ai-ticket`                 | Service name attached to exported spans and metrics.                |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | _unset_                     | Optional OTLP collector endpoint for forwarding traces.             |
+| `OTEL_PROMETHEUS_HOST`        | `0.0.0.0`                   | Interface exposed by the embedded Prometheus metrics exporter.      |
+| `OTEL_PROMETHEUS_PORT`        | `9464`                      | Port scraped by Prometheus for latency and error metrics.           |
 
 ## Roadmap
 
@@ -133,11 +137,19 @@ The near-term focus areas are documented to help contributors align on prioritie
 * If you are upgrading an older checkout, prune any lingering `vendor/*` folders in your workspace to stay aligned with the
   tracked tree.
 
+## Operations
+
+* Run `ops/bootstrap.sh` to provision a local environment, install dependencies,
+  and populate a starter `.env` file with telemetry configuration.
+* Consult the [Operations Runbook](docs/runbook.md) for alerting, scaling, and
+  incident response procedures.
+
 ## Documentation index
 
 * [Architecture Decision Records](docs/adr/README.md)
 * [UI/UX strategy and keyboard shortcuts](docs/ui-ux-roadmap.md)
 * [Asynchronous pipeline usage](docs/async_pipeline.md)
+* [Operations Runbook](docs/runbook.md)
 * [Contribution guidelines](CONTRIBUTING.md)
 
 ## Contributing
