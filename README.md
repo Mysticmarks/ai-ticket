@@ -23,8 +23,10 @@ automation pipelines.
   entrypoint for reliable deployment.
 * **Operator-focused CLI** – the bundled `ai-ticket` command provides accent-themed terminal controls for starting the
   server, issuing prompts, and running health diagnostics with structured feedback.
-* **Observability via structured logging** – the Flask server and inference pipeline emit log records with consistent
-  formatting and log levels that can be tuned through environment variables.
+* **Observability via structured logging & metrics** – the Flask server emits JSON logs and exposes Prometheus-compatible
+  counters, gauges, and histograms for health, error rates, and latency.
+* **Authentication & request throttling** – bearer-token authentication and per-client request quotas protect the `/event`
+  endpoint from abuse out-of-the-box.
 * **Tests and CI/CD guard-rails** – pytest suites, static analysis, and Docker build validation run through GitHub Actions to
   catch regressions early.
 
@@ -47,8 +49,8 @@ automation pipelines.
                                                          └────────────────────┘
 ```
 
-* **HTTP surface** – `src/ai_ticket/server.py` hosts Flask endpoints (`/event`, `/health`) and applies request logging plus
-  status-code mapping for common failure scenarios.
+* **HTTP surface** – `src/ai_ticket/server.py` hosts Flask endpoints (`/event`, `/health`, `/metrics`) with authentication,
+  rate limiting, structured logging, and status-code mapping for common failure scenarios.
 * **Inference workflow** – `src/ai_ticket/events/inference.py` is the single entry point for all inference requests and can be
   imported directly for serverless or batch execution contexts.
 * **Backend integration** – `src/ai_ticket/backends/kobold_client.py` encapsulates session management and response parsing for
@@ -66,17 +68,29 @@ Create a `.env` file in the repository root (or set variables directly in your s
 KOBOLDCPP_API_URL=http://host.docker.internal:5001/api
 LOG_LEVEL=INFO
 PORT=5000
+RATE_LIMIT_REQUESTS=120
+RATE_LIMIT_WINDOW_SECONDS=60
+METRICS_NAMESPACE=ai_ticket
+TRUST_PROXY_COUNT=0
+# Provide at least one token when enabling auth without Docker secrets
+# AI_TICKET_AUTH_TOKEN=local-dev-token
 ```
 
 ### 2. Run with Docker Compose (recommended)
 
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
-* The API becomes available at `http://localhost:${PORT:-5000}/event`.
-* Health probes use `http://localhost:${PORT:-5000}/health`.
-* Use `docker-compose down` to stop services and `docker-compose logs -f ai_ticket` to inspect runtime behaviour.
+Before launching, copy `ops/secrets/ai_ticket_auth_token.txt.example` to `ops/secrets/ai_ticket_auth_token.txt` and replace the
+placeholder with strong bearer tokens. Place TLS materials in `ops/certs/server.crt` and `ops/certs/server.key` (self-signed
+certificates work for local development).
+
+* The API becomes available at `https://localhost:${TLS_PORT:-8443}/event` via the TLS offload proxy. You can still reach the
+  Flask container directly on `http://localhost:${PORT:-5000}/event` when running outside of Docker.
+* Health probes use `https://localhost:${TLS_PORT:-8443}/health`.
+* Prometheus scrapers can collect metrics from `https://localhost:${TLS_PORT:-8443}/metrics`.
+* Use `docker compose down` to stop services and `docker compose logs -f ai_ticket` to inspect runtime behaviour.
 
 ### 3. Local development without containers
 
@@ -89,6 +103,20 @@ pip install -e .
 export KOBOLDCPP_API_URL=http://localhost:5001/api
 flask --app ai_ticket.server run --host 0.0.0.0 --port 5000
 ```
+
+### Authentication & throttling
+
+The `/event` endpoint requires authentication when either `AI_TICKET_AUTH_TOKEN` (comma-separated tokens) or
+`AI_TICKET_AUTH_TOKEN_FILE` (newline-delimited tokens) is configured. Clients must include one of the following headers:
+
+* `Authorization: Bearer <token>`
+* `X-API-Key: <token>`
+
+Requests are throttled per client IP using the `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW_SECONDS` settings. The application
+trusts proxy headers when `TRUST_PROXY_COUNT` is greater than zero, enabling accurate rate limits behind the bundled TLS proxy.
+
+Prometheus metrics are available at `/metrics` and include latency, error, and in-flight request tracking. Adjust
+`METRICS_NAMESPACE` to namescope the exported series for your monitoring stack.
 
 ### 4. Command-line interface
 
@@ -110,11 +138,19 @@ theming controls.
 
 ## Configuration quick reference
 
-| Variable            | Default                     | Description                                                  |
-|---------------------|-----------------------------|--------------------------------------------------------------|
-| `KOBOLDCPP_API_URL` | `http://localhost:5001/api` | Target KoboldCPP-compatible inference endpoint.              |
-| `LOG_LEVEL`         | `INFO`                      | Python logging level (`DEBUG`, `INFO`, `WARNING`, ...).      |
-| `PORT`              | `5000`                      | Port used by the Flask development server (not Gunicorn).    |
+| Variable                       | Default                     | Description                                                                 |
+|--------------------------------|-----------------------------|-----------------------------------------------------------------------------|
+| `KOBOLDCPP_API_URL`            | `http://localhost:5001/api` | Target KoboldCPP-compatible inference endpoint.                             |
+| `LOG_LEVEL`                    | `INFO`                      | Python logging level (`DEBUG`, `INFO`, `WARNING`, ...).                     |
+| `PORT`                         | `5000`                      | Port used by the Flask development server (not Gunicorn).                   |
+| `AI_TICKET_AUTH_TOKEN`         | _unset_                     | Comma-separated bearer tokens accepted by the `/event` endpoint.           |
+| `AI_TICKET_AUTH_TOKEN_FILE`    | _unset_                     | Path to newline-delimited bearer tokens (set automatically via Docker secret). |
+| `RATE_LIMIT_REQUESTS`          | `120`                       | Requests allowed per client within a window.                                |
+| `RATE_LIMIT_WINDOW_SECONDS`    | `60`                        | Duration of the rate limit window (seconds).                                |
+| `METRICS_NAMESPACE`            | `ai_ticket`                 | Prometheus namespace prefix for exported metrics.                           |
+| `TRUST_PROXY_COUNT`            | `0`                         | Number of reverse proxies to trust when deriving client IP addresses.       |
+| `TLS_PORT`                     | `8443`                      | External TLS port exposed by the Compose TLS proxy.                         |
+| `WERKZEUG_LOG_LEVEL`           | matches `LOG_LEVEL`         | Optional override for Werkzeug's access log level.                          |
 
 ## Roadmap
 

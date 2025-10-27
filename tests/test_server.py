@@ -1,6 +1,9 @@
-import pytest
 import json
+import pytest
+
+from ai_ticket.metrics import CONTENT_TYPE_LATEST
 from ai_ticket.events.inference import CompletionResponse, ErrorResponse
+from src.ai_ticket import server
 from src.ai_ticket.server import app as flask_app # Import the Flask app instance
 
 @pytest.fixture
@@ -10,6 +13,14 @@ def app():
 @pytest.fixture
 def client(app):
     return app.test_client()
+
+
+@pytest.fixture(autouse=True)
+def reset_auth_tokens():
+    original_tokens = set(server.AUTH_TOKENS)
+    yield
+    server.AUTH_TOKENS.clear()
+    server.AUTH_TOKENS.update(original_tokens)
 
 def test_handle_event_success(client, mocker):
     # Mock the on_event function to avoid actual backend calls
@@ -91,3 +102,55 @@ def test_handle_event_prompt_extraction_failed(client, mocker):
     response_data = json.loads(response.data)
     assert response_data["error"] == "prompt_extraction_failed"
     mock_on_event.assert_called_once_with(payload)
+
+
+def test_missing_authentication_token(client, mocker):
+    mocker.patch('src.ai_ticket.server.on_event').return_value = CompletionResponse(completion="ok")
+    server.AUTH_TOKENS.clear()
+    server.AUTH_TOKENS.update({"secret-token"})
+
+    response = client.post("/event", json={"content": "needs auth"})
+
+    assert response.status_code == 401
+    data = json.loads(response.data)
+    assert data["error"] == "unauthorised"
+
+
+def test_valid_bearer_token_allows_request(client, mocker):
+    mocker.patch('src.ai_ticket.server.on_event').return_value = CompletionResponse(completion="secure")
+    server.AUTH_TOKENS.clear()
+    server.AUTH_TOKENS.update({"secret-token"})
+
+    response = client.post(
+        "/event",
+        json={"content": "authorised"},
+        headers={"Authorization": "Bearer secret-token"},
+    )
+
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["completion"] == "secure"
+
+
+def test_metrics_endpoint_available(client):
+    response = client.get("/metrics")
+
+    assert response.status_code == 200
+    assert response.content_type == CONTENT_TYPE_LATEST
+
+
+def test_rate_limiter_blocks_when_threshold_exceeded(client, mocker):
+    mocker.patch('src.ai_ticket.server.on_event').return_value = CompletionResponse(completion="ok")
+    original = server.RATE_LIMITER
+    server.RATE_LIMITER = server.RateLimiter(limit=1, window_seconds=60)
+
+    try:
+        first = client.post("/event", json={"content": "first"}, headers={"X-Forwarded-For": "1.1.1.1"})
+        assert first.status_code == 200
+
+        second = client.post("/event", json={"content": "second"}, headers={"X-Forwarded-For": "1.1.1.1"})
+        assert second.status_code == 429
+        data = json.loads(second.data)
+        assert data["error"] == "rate_limited"
+    finally:
+        server.RATE_LIMITER = original
