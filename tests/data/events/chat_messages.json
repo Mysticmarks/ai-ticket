@@ -1,0 +1,20 @@
+[
+  {
+    "messages": [
+      {"role": "system", "content": "You are TicketGPT, a support summariser."},
+      {"role": "user", "content": "Summarise issue #1001 about login failures."}
+    ]
+  },
+  {
+    "messages": [
+      {"role": "system", "content": "You triage incoming support tickets."},
+      {"role": "user", "content": "Draft a response for the outage impacting billing."}
+    ]
+  },
+  {
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": "Explain the escalation path for priority incidents."}
+    ]
+  }
+]
