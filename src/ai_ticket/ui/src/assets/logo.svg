@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">AI Ticket Logo</title>
+  <desc id="desc">Stylised ticket with gradient accent</desc>
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#a855f7" />
+    </linearGradient>
+  </defs>
+  <rect x="12" y="24" width="104" height="80" rx="16" fill="url(#grad)" />
+  <path d="M32 52h64M32 76h44" stroke="#f8fafc" stroke-width="6" stroke-linecap="round" />
+  <circle cx="94" cy="76" r="10" fill="#f8fafc" />
+  <circle cx="82" cy="64" r="6" fill="#f8fafc" />
+  <circle cx="106" cy="64" r="6" fill="#f8fafc" />
+  <path d="M82 64l12 12 12-12" stroke="#1e293b" stroke-width="4" stroke-linejoin="round" fill="none" />
+</svg>
