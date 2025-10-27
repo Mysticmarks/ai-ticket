@@ -1,21 +1,53 @@
-version: '3'
+version: '3.8'
 services:
   ai_ticket:
     image: ai_ticket
     build:
       context: .
     restart: unless-stopped
-    ports:
-      - "5000:5000"
+    expose:
+      - "5000"
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - RATE_LIMIT_REQUESTS=${RATE_LIMIT_REQUESTS:-120}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-60}
+      - METRICS_NAMESPACE=${METRICS_NAMESPACE:-ai_ticket}
+      - TRUST_PROXY_COUNT=${TRUST_PROXY_COUNT:-1}
+      - AI_TICKET_AUTH_TOKEN_FILE=/run/secrets/ai_ticket_auth_token
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 5s
-    # Optional: Add environment variables for KOBOLDCPP_API_URL if needed here
-    # environment:
-    #   - KOBOLDCPP_API_URL=http://host.docker.internal:5001/api
-    # (Note: host.docker.internal is for Docker Desktop to access host services)
-    # Or it might be expected that KOBOLDCPP_API_URL is set in the environment
-    # where 'docker-compose up' is run, or in an .env file.
+    secrets:
+      - ai_ticket_auth_token
+    networks:
+      - private
+  tls_proxy:
+    image: nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      - ai_ticket
+    ports:
+      - "${TLS_PORT:-8443}:443"
+    volumes:
+      - ./ops/nginx:/etc/nginx/conf.d:ro
+      - ./ops/certs:/etc/nginx/certs:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "--spider", "https://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - private
+      - edge
+
+secrets:
+  ai_ticket_auth_token:
+    file: ./ops/secrets/ai_ticket_auth_token.txt
+
+networks:
+  private:
+  edge:
