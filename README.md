@@ -5,9 +5,10 @@
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Imports: isort](https://img.shields.io/badge/%20imports-isort-%231674b1?style=flat&labelColor=ef8336)](https://pycqa.github.io/isort/)
 
-The **AI Ticket** service streamlines event-driven interactions with Large Language Models (LLMs) – optimised for KoboldCPP –
-by normalising inbound payloads, orchestrating resilient inference calls, and returning structured responses suitable for
-automation pipelines.
+The **AI Ticket** service streamlines event-driven interactions with Large Language Models (LLMs) – optimised for
+KoboldCPP – by normalising inbound payloads, orchestrating resilient inference calls, and returning structured responses
+suited to automation pipelines. The production build currently targets a **single backend family (KoboldCPP-compatible
+chat APIs)**; multi-provider orchestration remains a roadmap item.
 
 > 💬 Join the discussion on Discord: https://discord.com/invite/XWSam9kE (invite may change)
 
@@ -56,10 +57,21 @@ automation pipelines.
   rate limiting, structured logging, and status-code mapping for common failure scenarios.
 * **Inference workflow** – `src/ai_ticket/events/inference.py` is the single entry point for all inference requests and can be
   imported directly for serverless or batch execution contexts.
-* **Backend integration** – `src/ai_ticket/backends/kobold_client.py` encapsulates session management and response parsing for
-  KoboldCPP-compatible APIs.
+* **Backend integration** – `src/ai_ticket/backends/kobold_client.py` encapsulates session management and response parsing
+  for KoboldCPP-compatible APIs. A generalised orchestration pipeline exists for future providers, but no additional
+  backends are wired in yet.
 
-Additional design rationale is captured in [Architecture Decision Records](docs/adr/README.md).
+Additional design rationale is captured in [Architecture Decision Records](docs/adr/README.md), including
+[ADR-0001](docs/adr/0001-prefer-koboldcpp-backend.md) which formalises the single-backend focus and the follow-up work
+required before introducing alternates.
+
+## Backend support status
+
+| Provider                                   | Status | Notes |
+|--------------------------------------------|:------:|-------|
+| KoboldCPP-compatible chat endpoints        |   ✅   | Production integration via `kobold_client`.
+| Other OpenAI-style chat/completions APIs    |   ⏳   | Interface scaffolding exists; adapters not yet implemented.
+| Proprietary or community-specific backends |   ⏳   | Requires new adapters plus validation & observability wiring.
 
 ## Deployment
 
@@ -166,15 +178,18 @@ worker classes, and theming controls.
 
 ## Roadmap
 
-The near-term focus areas are documented to help contributors align on priorities:
+The near-term focus areas are documented to help contributors align on priorities. Unchecked items remain outstanding from
+previous iterations:
 
-* **Dashboard deepening** – extend the shipped SPA with prompt history, keyboard shortcut overlays, and admin controls (see
-  [UI/UX notes](docs/ui-ux-roadmap.md)).
-* **Backend pluggability** – introduce a provider interface to support multiple LLM backends alongside KoboldCPP.
-* **Shared state services** – move authentication, rate limiting, and metrics aggregation to persistent stores to enable
-  horizontal scaling.
-* **Load & soak testing** – automate performance regression tests for key workloads to validate retry budgets and error paths.
-* **Release automation** – codify a packaging and changelog pipeline so operators can track and deploy tagged builds reliably.
+- [ ] **Dashboard deepening** – extend the shipped SPA with prompt history, richer keyboard shortcut overlays, and admin
+      controls (see [UI/UX notes](docs/ui-ux-roadmap.md)).
+- [ ] **Backend pluggability** – introduce production-ready provider adapters beyond KoboldCPP.
+- [ ] **Shared state services** – move authentication, rate limiting, and metrics aggregation to persistent stores so
+      horizontally scaled deployments share quotas and history.
+- [ ] **Load & soak testing** – automate performance regression tests for key workloads to validate retry budgets and error
+      paths.
+- [ ] **Release automation** – codify a packaging and changelog pipeline so operators can track and deploy tagged builds
+      reliably.
 
 ## Repository hygiene
 
@@ -186,8 +201,10 @@ The near-term focus areas are documented to help contributors align on prioritie
 ## Documentation index
 
 * [Architecture Decision Records](docs/adr/README.md)
+* [Deployment topologies](docs/deployment/topologies.md)
 * [UI/UX strategy and keyboard shortcuts](docs/ui-ux-roadmap.md)
 * [Asynchronous pipeline usage](docs/async_pipeline.md)
+* [Dashboard runbooks](docs/runbooks/dashboard.md)
 * [Contribution guidelines](CONTRIBUTING.md)
 
 ## Contributing
