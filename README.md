@@ -144,19 +144,25 @@ worker classes, and theming controls.
 
 ## Configuration quick reference
 
-| Variable                       | Default                     | Description                                                                 |
-|--------------------------------|-----------------------------|-----------------------------------------------------------------------------|
-| `KOBOLDCPP_API_URL`            | `http://localhost:5001/api` | Target KoboldCPP-compatible inference endpoint.                             |
-| `LOG_LEVEL`                    | `INFO`                      | Python logging level (`DEBUG`, `INFO`, `WARNING`, ...).                     |
-| `PORT`                         | `5000`                      | Default port used by the CLI and Flask development server.                   |
-| `AI_TICKET_AUTH_TOKEN`         | _unset_                     | Comma-separated bearer tokens accepted by the `/event` endpoint.           |
-| `AI_TICKET_AUTH_TOKEN_FILE`    | _unset_                     | Path to newline-delimited bearer tokens (set automatically via Docker secret). |
-| `RATE_LIMIT_REQUESTS`          | `120`                       | Requests allowed per client within a window.                                |
-| `RATE_LIMIT_WINDOW_SECONDS`    | `60`                        | Duration of the rate limit window (seconds).                                |
-| `METRICS_NAMESPACE`            | `ai_ticket`                 | Prometheus namespace prefix for exported metrics.                           |
-| `TRUST_PROXY_COUNT`            | `0`                         | Number of reverse proxies to trust when deriving client IP addresses.       |
-| `TLS_PORT`                     | `8443`                      | External TLS port exposed by the Compose TLS proxy.                         |
-| `WERKZEUG_LOG_LEVEL`           | matches `LOG_LEVEL`         | Optional override for Werkzeug's access log level.                          |
+| Variable                                 | Default                     | Description |
+|------------------------------------------|-----------------------------|-------------|
+| `KOBOLDCPP_API_URL`                      | `http://localhost:5001/api` | Target KoboldCPP-compatible inference endpoint. |
+| `LOG_LEVEL`                              | `INFO`                      | Python logging level (`DEBUG`, `INFO`, `WARNING`, ...). |
+| `PORT`                                   | `5000`                      | Default port used by the CLI and Flask development server. |
+| `AI_TICKET_AUTH_TOKEN`                   | _unset_                     | Comma-separated bearer tokens accepted by the `/event` endpoint. |
+| `AI_TICKET_AUTH_TOKEN_FILE`              | _unset_                     | Path to newline-delimited bearer tokens (set automatically via Docker secret). |
+| `AI_TICKET_AUTH_TOKEN_RELOAD_INTERVAL`   | `30`                        | Minimum seconds between authentication token reloads. |
+| `RATE_LIMIT_REQUESTS`                    | `120`                       | Requests allowed per client within a window. |
+| `RATE_LIMIT_WINDOW_SECONDS`              | `60`                        | Duration of the rate limit window (seconds). |
+| `RATE_LIMIT_BACKEND`                     | `memory`                    | Rate limiter backend (`memory` or `sqlite`). |
+| `RATE_LIMIT_SQLITE_PATH`                 | `rate_limit.sqlite3`        | SQLite database path when `RATE_LIMIT_BACKEND=sqlite`. |
+| `RATE_LIMIT_CLEANUP_INTERVAL`            | `60`                        | Seconds between cleanup sweeps for the SQLite rate limiter. |
+| `AI_TICKET_METRICS_DB`                   | _unset_                     | Optional SQLite file used to persist dashboard metrics. |
+| `AI_TICKET_METRICS_RETENTION_SECONDS`    | `900`                       | Retention window for dashboard metrics (seconds). |
+| `METRICS_NAMESPACE`                      | `ai_ticket`                 | Prometheus namespace prefix for exported metrics. |
+| `TRUST_PROXY_COUNT`                      | `0`                         | Number of reverse proxies to trust when deriving client IP addresses. |
+| `TLS_PORT`                               | `8443`                      | External TLS port exposed by the Compose TLS proxy. |
+| `WERKZEUG_LOG_LEVEL`                     | matches `LOG_LEVEL`         | Optional override for Werkzeug's access log level. |
 
 ## Roadmap
 
