@@ -17,6 +17,11 @@ from collections import defaultdict, deque
 from pathlib import Path
 
 from ai_ticket.metrics import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+
+try:  # pragma: no cover - optional dependency path
+    from prometheus_client import REGISTRY  # type: ignore
+except ImportError:  # pragma: no cover - exercised when prometheus is absent
+    REGISTRY = None  # type: ignore[assignment]
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from ai_ticket.events.inference import CompletionResponse, ErrorResponse, on_event
@@ -132,10 +137,54 @@ class RateLimiter:
             return True, None
 
 
+def _unregister_previous_metric_collectors(metric_names: list[str]) -> None:
+    """Remove lingering collectors from the default Prometheus registry.
+
+    When the server module is imported multiple times within the same Python
+    process—as happens during the test suite—the global CollectorRegistry keeps
+    the previously registered metrics. Re-registering the same metric names
+    raises a ``ValueError`` about duplicate time series. Clearing the existing
+    collectors first keeps the module import idempotent without requiring the
+    caller to manage global Prometheus state.
+    """
+
+    if REGISTRY is None:  # pragma: no cover - handled by compatibility layer
+        return
+
+    names_to_collectors = getattr(REGISTRY, "_names_to_collectors", {})
+    collectors = {
+        names_to_collectors.get(metric_name)
+        for metric_name in metric_names
+        if names_to_collectors.get(metric_name) is not None
+    }
+
+    for collector in collectors:
+        try:
+            REGISTRY.unregister(collector)  # type: ignore[arg-type]
+        except KeyError:  # pragma: no cover - defensive guard
+            continue
+
+
 def _configure_metrics() -> None:
     global REQUEST_COUNTER, REQUEST_ERRORS, REQUEST_LATENCY, IN_FLIGHT_GAUGE
     if REQUEST_COUNTER is not None:
         return
+
+    _unregister_previous_metric_collectors(
+        [
+            f"{METRICS_NAMESPACE}_http_requests",
+            f"{METRICS_NAMESPACE}_http_requests_created",
+            f"{METRICS_NAMESPACE}_http_requests_total",
+            f"{METRICS_NAMESPACE}_http_request_errors",
+            f"{METRICS_NAMESPACE}_http_request_errors_created",
+            f"{METRICS_NAMESPACE}_http_request_errors_total",
+            f"{METRICS_NAMESPACE}_http_request_duration_seconds",
+            f"{METRICS_NAMESPACE}_http_request_duration_seconds_bucket",
+            f"{METRICS_NAMESPACE}_http_request_duration_seconds_count",
+            f"{METRICS_NAMESPACE}_http_request_duration_seconds_sum",
+            f"{METRICS_NAMESPACE}_http_requests_in_flight",
+        ]
+    )
 
     REQUEST_COUNTER = Counter(
         "http_requests_total",
