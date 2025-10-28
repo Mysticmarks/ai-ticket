@@ -8,8 +8,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Final
 
-import anyio
-import httpx
+from ai_ticket._compat import anyio, httpx
 
 from .base import (
     AsyncBackend,

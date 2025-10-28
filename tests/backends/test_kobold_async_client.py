@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-import anyio
-import httpx
 import pytest
+
+from ai_ticket._compat import anyio, httpx
 
 from ai_ticket.backends.kobold_client import KoboldCompletionResult, async_get_kobold_completion
 

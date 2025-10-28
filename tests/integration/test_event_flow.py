@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import httpx
 import pytest
+
+from ai_ticket._compat import httpx
 
 from ai_ticket.backends.kobold_client import KoboldCompletionResult
 from ai_ticket.server import app as flask_app

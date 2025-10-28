@@ -19,6 +19,9 @@ automation pipelines.
   prioritisation, exponential backoff, and structured error classification for transient and terminal failures.
 * **Asynchronous orchestration** – `ai_ticket.backends.kobold_client.async_get_kobold_completion` and the
   `AsyncInferencePipeline` enable concurrent inference with cooperative cancellation and ordered response delivery.
+* **First-class async foundation** – the service prefers upstream `anyio` and `httpx` packages while shipping lightweight
+  compatibility shims for offline environments, keeping battle-tested connection pooling, cancellation scopes, and streaming
+  primitives available when the real dependencies are installed.
 * **Container-first delivery** – the project ships with a production-ready `Dockerfile`, Compose descriptors, and a Gunicorn
   entrypoint for reliable deployment.
 * **Operator-focused CLI** – the bundled `ai-ticket` command provides accent-themed terminal controls for starting the

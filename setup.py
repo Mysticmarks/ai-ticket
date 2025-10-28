@@ -12,7 +12,9 @@ setup(
     url='https://github.com/jmikedupont2/ai-ticket',
     install_requires=[
         'Flask>=2.0',
+        'anyio>=3.7',
         'gunicorn',
+        'httpx>=0.24',
         'python-dotenv',
         'requests',
     ],

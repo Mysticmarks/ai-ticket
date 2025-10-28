@@ -1,4 +1,10 @@
-"""Minimal httpx-compatible client built on top of requests."""
+"""Subset of the httpx API relying on requests for synchronous transport.
+
+Like :mod:`ai_ticket._compat._anyio_stub`, this module is a pragmatic fallback
+that keeps tests operational when the real :mod:`httpx` package is not
+installable. Production deployments should still install the genuine library to
+benefit from streaming, HTTP/2, and other advanced features.
+"""
 
 from __future__ import annotations
 
@@ -7,14 +13,13 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+import requests
 from werkzeug.test import Client as WerkzeugClient
 from werkzeug.wrappers import Response as WerkzeugResponse
 
-import requests
-
 
 class HTTPError(Exception):
-    pass
+    """Base class mirroring :class:`httpx.HTTPError`."""
 
 
 class RequestError(HTTPError):
@@ -24,14 +29,16 @@ class RequestError(HTTPError):
 
 
 class ConnectError(RequestError):
-    pass
+    """Connection-level failure."""
 
 
 class ReadTimeout(RequestError):
-    pass
+    """Request timed out before completion."""
 
 
 class HTTPStatusError(HTTPError):
+    """Raised when a non-successful HTTP status is encountered."""
+
     def __init__(self, message: str, *, request: "Request", response: "Response") -> None:
         super().__init__(message)
         self.request = request
@@ -63,7 +70,7 @@ class Response:
         self.status_code = status_code
         self.request = request
         if json is not None:
-            self._content = json_encode(json)
+            self._content = json_dumps(json)
             self._json_data = json
         elif text is not None:
             self._content = text.encode()
@@ -94,16 +101,20 @@ class Response:
             raise HTTPStatusError("HTTP error", request=request, response=self)
 
 
-def json_encode(data: Any) -> bytes:
+def json_dumps(data: Any) -> bytes:
     return json.dumps(data).encode()
 
 
 class WSGITransport:
+    """WSGI transport that mirrors :class:`httpx.WSGITransport`."""
+
     def __init__(self, *, app: Any) -> None:
         self.app = app
 
 
 class Client:
+    """Synchronous WSGI client with the httpx API surface."""
+
     def __init__(self, *, transport: WSGITransport | None = None, base_url: str | None = None) -> None:
         if transport is None:
             raise ValueError("WSGITransport is required when using the lightweight httpx shim")
@@ -111,10 +122,10 @@ class Client:
         self._base_url = (base_url or "").rstrip("/")
         self._client = WerkzeugClient(transport.app, response_wrapper=WerkzeugResponse)
 
-    def __enter__(self) -> Client:
+    def __enter__(self) -> "Client":
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, exc_type, exc, tb) -> bool:  # pragma: no cover - passthrough
         return False
 
     def post(
@@ -144,6 +155,8 @@ class Client:
 
 
 class AsyncClient:
+    """Async client delegating requests to :mod:`requests` in a worker thread."""
+
     def __init__(self, *, limits: Limits | None = None, timeout: float | None = None) -> None:
         self._session = requests.Session()
         self._timeout = timeout
@@ -202,4 +215,3 @@ __all__ = [
     "ConnectError",
     "ReadTimeout",
 ]
-
