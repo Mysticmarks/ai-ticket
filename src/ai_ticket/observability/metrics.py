@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -9,6 +10,8 @@ from dataclasses import dataclass, asdict
 from queue import SimpleQueue
 from statistics import mean
 from typing import Deque, Dict, Iterable, List
+
+from .persistence import MetricsPersistence, SQLiteMetricsPersistence, Totals
 
 
 @dataclass(frozen=True)
@@ -33,7 +36,12 @@ class Outcome:
 class MetricsStore:
     """Capture inference metrics for the dashboard."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        persistence: MetricsPersistence | None = None,
+        retention_seconds: float = 15 * 60,
+    ) -> None:
         self._lock = threading.Lock()
         self._total_requests = 0
         self._successes = 0
@@ -44,6 +52,11 @@ class MetricsStore:
         self._sparkline: Deque[float] = deque([0.0] * 24, maxlen=24)
         self._recent_errors: Deque[ErrorRecord] = deque(maxlen=20)
         self._subscribers: List[SimpleQueue[dict]] = []
+        self._persistence = persistence
+        self._retention_seconds = max(retention_seconds, 60.0)
+
+        if self._persistence is not None:
+            self._initialise_from_persistence()
 
     def record_event(
         self,
@@ -60,7 +73,8 @@ class MetricsStore:
                 self._successes += 1
             else:
                 self._errors += 1
-            self._latencies.append(latency_s * 1000)
+            latency_ms = latency_s * 1000
+            self._latencies.append(latency_ms)
             self._event_timestamps.append(now)
             self._recent_outcomes.append(Outcome(timestamp=now, success=success))
 
@@ -76,6 +90,15 @@ class MetricsStore:
             self._prune_events_locked(now)
             throughput_per_minute = self._calculate_throughput_locked(window=60.0, reference=now)
             self._sparkline.append(throughput_per_minute)
+
+            if self._persistence is not None:
+                self._persistence.persist_event(
+                    timestamp=now,
+                    latency_ms=latency_ms,
+                    success=success,
+                    error_code=error_code,
+                    message=message,
+                )
 
             snapshot = self._build_snapshot_locked(now)
             self._publish_locked(snapshot)
@@ -105,13 +128,16 @@ class MetricsStore:
             queue.put(snapshot)
 
     def _prune_events_locked(self, reference_time: float) -> None:
-        cutoff = reference_time - 15 * 60
+        cutoff = reference_time - self._retention_seconds
         while self._event_timestamps and self._event_timestamps[0] < cutoff:
             self._event_timestamps.popleft()
         while self._recent_outcomes and self._recent_outcomes[0].timestamp < cutoff:
             self._recent_outcomes.popleft()
         while self._recent_errors and self._recent_errors[-1].timestamp < cutoff:
             self._recent_errors.pop()
+
+        if self._persistence is not None:
+            self._persistence.prune(cutoff=cutoff)
 
     def _calculate_throughput_locked(self, *, window: float, reference: float) -> float:
         relevant_events = [ts for ts in self._event_timestamps if reference - ts <= window]
@@ -213,7 +239,66 @@ class MetricsStore:
             return [0.1 for _ in values]
         return [max(value / max_value, 0.1) for value in values]
 
+    def _initialise_from_persistence(self) -> None:
+        reference_time = time.time()
+        totals, events = self._persistence.load_state(
+            reference_time=reference_time,
+            retention_seconds=self._retention_seconds,
+        )
+        with self._lock:
+            self._total_requests = totals.requests
+            self._successes = totals.successes
+            self._errors = totals.errors
+            for event in events:
+                self._latencies.append(event.latency_ms)
+                self._event_timestamps.append(event.timestamp)
+                self._recent_outcomes.append(
+                    Outcome(timestamp=event.timestamp, success=event.success)
+                )
+                if event.error_code:
+                    self._recent_errors.appendleft(
+                        ErrorRecord(
+                            id=str(uuid.uuid4()),
+                            code=event.error_code,
+                            message=event.message or "Unknown error",
+                            timestamp=event.timestamp,
+                        )
+                    )
 
-metrics_store = MetricsStore()
+            self._prune_events_locked(reference_time)
+            self._rebuild_sparkline_locked(reference_time)
+
+    def _rebuild_sparkline_locked(self, reference_time: float) -> None:
+        buckets = []
+        for index in range(24):
+            window_end = reference_time - (23 - index) * 60
+            window_start = window_end - 60
+            count = sum(
+                1
+                for ts in self._event_timestamps
+                if window_start < ts <= window_end
+            )
+            buckets.append(count)
+
+        if not buckets:
+            buckets = [0.0] * 24
+
+        self._sparkline = deque(buckets, maxlen=24)
+
+
+_metrics_db_path = os.environ.get("AI_TICKET_METRICS_DB")
+_metrics_persistence: MetricsPersistence | None = None
+if _metrics_db_path:
+    _metrics_persistence = SQLiteMetricsPersistence(_metrics_db_path)
+
+try:
+    _metrics_retention = float(os.environ.get("AI_TICKET_METRICS_RETENTION_SECONDS", str(15 * 60)))
+except ValueError:
+    _metrics_retention = 15 * 60
+
+metrics_store = MetricsStore(
+    persistence=_metrics_persistence,
+    retention_seconds=max(_metrics_retention, 60.0),
+)
 
 __all__ = ["metrics_store", "MetricsStore"]

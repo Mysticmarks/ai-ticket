@@ -13,8 +13,6 @@ import atexit
 import signal
 import threading
 import time
-from collections import defaultdict, deque
-from pathlib import Path
 
 from ai_ticket.metrics import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
@@ -27,6 +25,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from ai_ticket.events.inference import CompletionResponse, ErrorResponse, on_event
 from ai_ticket.observability import metrics_store
 from ai_ticket.ui import get_ui_dist_path
+from ai_ticket.security import TokenManager, InMemoryRateLimiter, SQLiteRateLimiter
 
 
 class JsonFormatter(logging.Formatter):
@@ -91,50 +90,6 @@ def configure_logging() -> None:
     root_logger.setLevel(log_level)
 
     logging.getLogger("werkzeug").setLevel(os.environ.get("WERKZEUG_LOG_LEVEL", log_level))
-
-
-def _load_auth_tokens() -> set[str]:
-    tokens: set[str] = set()
-    token_env = os.environ.get("AI_TICKET_AUTH_TOKEN")
-    if token_env:
-        tokens.update(token.strip() for token in token_env.split(",") if token.strip())
-
-    token_file = os.environ.get("AI_TICKET_AUTH_TOKEN_FILE")
-    if token_file:
-        path = Path(token_file)
-        if path.exists():
-            file_tokens = [line.strip() for line in path.read_text().splitlines() if line.strip()]
-            tokens.update(file_tokens)
-        else:
-            logging.getLogger(__name__).warning(
-                "Auth token file not found", extra={"token_file": token_file}
-            )
-
-    return tokens
-
-
-class RateLimiter:
-    """Simple in-memory sliding window rate limiter."""
-
-    def __init__(self, limit: int, window_seconds: float) -> None:
-        self.limit = limit
-        self.window_seconds = window_seconds
-        self._events: defaultdict[str, deque[float]] = defaultdict(deque)
-        self._lock = threading.Lock()
-
-    def allow(self, key: str) -> tuple[bool, float | None]:
-        now = time.monotonic()
-        with self._lock:
-            events = self._events[key]
-            while events and now - events[0] > self.window_seconds:
-                events.popleft()
-
-            if len(events) >= self.limit:
-                retry_after = max(self.window_seconds - (now - events[0]), 0)
-                return False, retry_after
-
-            events.append(now)
-            return True, None
 
 
 def _unregister_previous_metric_collectors(metric_names: list[str]) -> None:
@@ -249,14 +204,36 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 UI_DIST_PATH = get_ui_dist_path()
-AUTH_TOKENS: set[str] = _load_auth_tokens()
+try:
+    _token_reload_interval = float(os.environ.get("AI_TICKET_AUTH_TOKEN_RELOAD_INTERVAL", "30"))
+except ValueError:
+    _token_reload_interval = 30.0
+TOKEN_MANAGER = TokenManager(reload_interval=max(_token_reload_interval, 1.0))
 RATE_LIMIT_REQUESTS = int(os.environ.get("RATE_LIMIT_REQUESTS", "120"))
 RATE_LIMIT_WINDOW_SECONDS = float(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60"))
-RATE_LIMITER = (
-    RateLimiter(RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_SECONDS)
-    if RATE_LIMIT_REQUESTS > 0 and RATE_LIMIT_WINDOW_SECONDS > 0
-    else None
-)
+RATE_LIMIT_BACKEND = os.environ.get("RATE_LIMIT_BACKEND", "memory").lower()
+RATE_LIMIT_CLEANUP = os.environ.get("RATE_LIMIT_CLEANUP_INTERVAL", "60")
+try:
+    rate_limit_cleanup_interval = max(float(RATE_LIMIT_CLEANUP), 1.0)
+except ValueError:
+    rate_limit_cleanup_interval = 60.0
+
+if RATE_LIMIT_REQUESTS > 0 and RATE_LIMIT_WINDOW_SECONDS > 0:
+    if RATE_LIMIT_BACKEND == "sqlite":
+        rate_limit_path = os.environ.get("RATE_LIMIT_SQLITE_PATH", "rate_limit.sqlite3")
+        RATE_LIMITER = SQLiteRateLimiter(
+            rate_limit_path,
+            limit=RATE_LIMIT_REQUESTS,
+            window_seconds=RATE_LIMIT_WINDOW_SECONDS,
+            cleanup_interval=rate_limit_cleanup_interval,
+        )
+    else:
+        RATE_LIMITER = InMemoryRateLimiter(
+            RATE_LIMIT_REQUESTS,
+            RATE_LIMIT_WINDOW_SECONDS,
+        )
+else:
+    RATE_LIMITER = None
 METRICS_NAMESPACE = os.environ.get("METRICS_NAMESPACE", "ai_ticket")
 
 REQUEST_COUNTER: Counter | None = None
@@ -297,7 +274,7 @@ def _enforce_security_controls():
     if endpoint in EXEMPT_ENDPOINTS:
         return None
 
-    if AUTH_TOKENS:
+    if TOKEN_MANAGER.has_tokens():
         provided_token = _extract_bearer_token() or request.headers.get("X-API-Key")
         if not provided_token:
             logger.warning("Missing authentication token", extra={"path": request.path})
@@ -305,7 +282,7 @@ def _enforce_security_controls():
                 {"error": "unauthorised", "details": "Authentication token missing."}
             ), 401
 
-        if provided_token not in AUTH_TOKENS:
+        if not TOKEN_MANAGER.is_valid(provided_token):
             logger.warning("Invalid authentication token", extra={"path": request.path})
             return jsonify(
                 {"error": "forbidden", "details": "Invalid authentication token."}
