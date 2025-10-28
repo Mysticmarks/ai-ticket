@@ -1,4 +1,11 @@
-"""Minimal anyio-compatible helpers built on top of asyncio."""
+"""Lightweight subset of the anyio API built on top of asyncio.
+
+This module exists purely as an execution fallback for environments where the
+upstream :mod:`anyio` package is unavailable (for example, offline test runs).
+The real project depends on the official anyio distribution at runtime, but the
+compatibility layer keeps local development and CI flowing even when optional
+extras cannot be installed.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +18,8 @@ sleep = asyncio.sleep
 
 
 class Semaphore(AbstractAsyncContextManager):
+    """Minimal semaphore compatible with :mod:`anyio`."""
+
     def __init__(self, value: int) -> None:
         self._sem = asyncio.Semaphore(value)
 
@@ -23,6 +32,8 @@ class Semaphore(AbstractAsyncContextManager):
 
 
 class CancelScope:
+    """Collection of tasks that can be cancelled together."""
+
     def __init__(self, tasks: list[asyncio.Task[Any]]) -> None:
         self._tasks = tasks
 
@@ -32,6 +43,8 @@ class CancelScope:
 
 
 class TaskGroup(AbstractAsyncContextManager):
+    """Simplified task group coordinating asyncio tasks."""
+
     def __init__(self) -> None:
         self._tasks: list[asyncio.Task[Any]] = []
         self.cancel_scope = CancelScope(self._tasks)
@@ -57,6 +70,8 @@ class TaskGroup(AbstractAsyncContextManager):
 
 
 class Event:
+    """Thin wrapper around :class:`asyncio.Event` with the anyio API surface."""
+
     def __init__(self) -> None:
         self._event = asyncio.Event()
 
@@ -77,10 +92,14 @@ lowlevel = _LowLevelModule()
 
 
 def create_task_group() -> TaskGroup:
+    """Return a new :class:`TaskGroup`."""
+
     return TaskGroup()
 
 
 def run(func: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any) -> Any:
+    """Execute an async callable, mirroring :func:`anyio.run`."""
+
     return asyncio.run(func(*args, **kwargs))
 
 
@@ -94,4 +113,3 @@ __all__ = [
     "run",
     "lowlevel",
 ]
-

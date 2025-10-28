@@ -1,6 +1,7 @@
+anyio>=3.7
 black
 flake8
-httpx
+httpx>=0.24
 isort
 pytest
 pytest-mock

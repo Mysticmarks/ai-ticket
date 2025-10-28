@@ -7,8 +7,7 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-import anyio
-import httpx
+from ai_ticket._compat import anyio, httpx
 
 from .base import (
     AsyncBackend,

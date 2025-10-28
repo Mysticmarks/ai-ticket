@@ -12,7 +12,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
-import httpx
+from ai_ticket._compat import httpx
 
 _DATA_FILE = Path(__file__).resolve().parents[2] / "tests" / "data" / "events" / "chat_messages.json"
 

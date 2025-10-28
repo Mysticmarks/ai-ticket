@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
+from ai_ticket._compat import httpx
 import pytest
 
 from ai_ticket.backends.kobold_client import KoboldCompletionResult, get_kobold_completion
