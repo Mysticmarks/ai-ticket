@@ -2,65 +2,139 @@ name: Continuous Integration
 
 on:
   push:
-    branches: [ "docker-main" ] # Or the actual main branch
+    branches: [ "docker-main" ]
   pull_request:
-    branches: [ "docker-main" ] # Or the actual main branch
-  workflow_dispatch: # Allow manual triggering
+    branches: [ "docker-main" ]
+  workflow_dispatch:
 
 jobs:
-  lint-test-build:
-    runs-on: ubuntu-latest # Using standard runner for broader compatibility first
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10"] # Consistent with Dockerfile
-
+  lint:
+    runs-on: ubuntu-latest
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4 # Updated to v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4 # Updated to v4
-      with:
-        python-version: ${{ matrix.python-version }}
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install -r requirements-dev.txt
-        pip install pytest-cov
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
-    - name: Validate docker-compose.yml
-      run: |
-        docker-compose config -q
+      - name: Validate docker-compose configuration
+        run: docker-compose config -q
 
-    - name: Lint with flake8
-      run: |
-        flake8 . --count --show-source --statistics
+      - name: Lint with flake8
+        run: flake8 . --count --show-source --statistics
 
-    - name: Check formatting with black
-      run: |
-        black --check .
+      - name: Check formatting with black
+        run: black --check .
 
-    - name: Check import order with isort
-      run: |
-        isort --check-only .
+      - name: Check import order with isort
+        run: isort --check-only .
 
-    - name: Run tests with pytest
-      run: |
-        pytest --cov=src/ai_ticket --cov-report=xml tests/
+  unit:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        files: ./coverage.xml
-        fail_ci_if_error: true
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
 
-    - name: Build Docker image for ai_ticket
-      run: |
-        docker-compose build ai_ticket
-        # As an alternative, could be: docker build . -t ai_ticket:latest -f Dockerfile
-        # This step is primarily to ensure the Dockerfile is valid and builds.
-        # Actual pushing is handled by docker-image.yml
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+          pip install pytest-cov
+
+      - name: Run unit and failure-mode tests
+        run: |
+          pytest \
+            --cov=src/ai_ticket \
+            --cov-report=xml \
+            -m "not performance" \
+            --ignore=tests/integration \
+            --ignore=tests/performance
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: true
+
+      - name: Build ai_ticket Docker image
+        run: docker-compose build ai_ticket
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run integration tests
+        run: pytest tests/integration
+
+  ui:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "18"
+
+      - name: Install UI dependencies
+        run: npm install
+        working-directory: src/ai_ticket/ui
+        env:
+          npm_config_package_lock: "false"
+
+      - name: Build UI bundle
+        run: npm run build
+        working-directory: src/ai_ticket/ui
+
+  performance-smoke:
+    runs-on: ubuntu-latest
+    needs: integration
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run performance smoke tests
+        run: pytest -m performance tests/performance --maxfail=1 --disable-warnings
