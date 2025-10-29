@@ -1,45 +1,57 @@
 from __future__ import annotations
 
-import json
-import time
-
+import anyio
 import pytest
+from collections.abc import AsyncIterator, Iterator
 
-from ai_ticket import server
+import ai_ticket.server as server
 from ai_ticket.events.inference import CompletionResponse, ErrorResponse
 from ai_ticket.metrics import CONTENT_TYPE_LATEST
 from ai_ticket.observability.metrics import MetricsStore
 from ai_ticket.security import InMemoryRateLimiter
-from ai_ticket.server import app as flask_app
+from httpx import ASGITransport, AsyncClient
 
 
+pytestmark = pytest.mark.anyio("asyncio")
 
 
 @pytest.fixture
-def client(app):
-    return app.test_client()
+async def client() -> AsyncIterator[AsyncClient]:
+    lifespan_manager = None
+    router = getattr(server.app, "router", None)
+    if router is not None and hasattr(router, "lifespan_context"):
+        lifespan_manager = router.lifespan_context(server.app)
+        await lifespan_manager.__aenter__()
+
+    try:
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as test_client:
+            yield test_client
+    finally:
+        if lifespan_manager is not None:
+            await lifespan_manager.__aexit__(None, None, None)
 
 
 @pytest.fixture(autouse=True)
 def reset_auth_tokens() -> Iterator[None]:
-    original_tokens = TOKEN_MANAGER.tokens
+    original_tokens = server.TOKEN_MANAGER.tokens
     yield
-    TOKEN_MANAGER.update_tokens(original_tokens)
+    server.TOKEN_MANAGER.update_tokens(original_tokens)
 
 
-def test_handle_event_success(client, mocker):
+async def test_handle_event_success(client: AsyncClient, mocker) -> None:
     mock_on_event = mocker.patch("ai_ticket.server.on_event")
     mock_on_event.return_value = CompletionResponse(completion="Test completion")
 
     payload = {"content": {"prompt": "Test prompt"}}
-    response = client.post("/event", json=payload)
+    response = await client.post("/event", json=payload)
 
     assert response.status_code == 200
     assert response.json() == {"completion": "Test completion"}
     mock_on_event.assert_called_once_with(payload)
 
 
-def test_handle_event_missing_content(client, mocker):
+async def test_handle_event_missing_content(client: AsyncClient, mocker) -> None:
     mock_on_event = mocker.patch("ai_ticket.server.on_event")
     mock_on_event.return_value = ErrorResponse(
         error="missing_content_field",
@@ -49,27 +61,30 @@ def test_handle_event_missing_content(client, mocker):
     )
 
     payload = {"some_other_key": "some_value"}
-    response = client.post("/event", json=payload)
+    response = await client.post("/event", json=payload)
 
     assert response.status_code == 400
     assert response.json()["error"] == "missing_content_field"
     mock_on_event.assert_called_once_with(payload)
 
 
-def test_handle_event_not_json(client, mocker):
+async def test_handle_event_not_json(client: AsyncClient, mocker) -> None:
     mock_on_event = mocker.patch("ai_ticket.server.on_event")
 
-    async with _make_client() as client:
-        response = await client.post("/event", data="not a json string", headers={"Content-Type": "text/plain"})
+    response = await client.post(
+        "/event",
+        content="not a json string",
+        headers={"Content-Type": "text/plain"},
+    )
 
     assert response.status_code == 400
-    response_data = json.loads(response.data)
+    response_data = response.json()
     assert response_data["error"] == "invalid_request"
     assert "Request must be JSON" in response_data["details"]
     mock_on_event.assert_not_called()
 
 
-def test_handle_event_on_event_error(client, mocker):
+async def test_handle_event_on_event_error(client: AsyncClient, mocker) -> None:
     mock_on_event = mocker.patch("ai_ticket.server.on_event")
     mock_on_event.return_value = ErrorResponse(
         error="api_connection_error",
@@ -79,14 +94,14 @@ def test_handle_event_on_event_error(client, mocker):
     )
 
     payload = {"content": {"prompt": "Test prompt for API error"}}
-    response = client.post("/event", json=payload)
+    response = await client.post("/event", json=payload)
 
     assert response.status_code == 503
     assert response.json()["error"] == "api_connection_error"
     mock_on_event.assert_called_once_with(payload)
 
 
-def test_handle_event_prompt_extraction_failed(client, mocker):
+async def test_handle_event_prompt_extraction_failed(client: AsyncClient, mocker) -> None:
     mock_on_event = mocker.patch("ai_ticket.server.on_event")
     mock_on_event.return_value = ErrorResponse(
         error="prompt_extraction_failed",
@@ -96,7 +111,7 @@ def test_handle_event_prompt_extraction_failed(client, mocker):
     )
 
     payload = {"content": {"unexpected_structure": True}}
-    response = client.post("/event", json=payload)
+    response = await client.post("/event", json=payload)
 
     assert response.status_code == 422
     assert response.json()["error"] == "prompt_extraction_failed"
@@ -104,11 +119,11 @@ def test_handle_event_prompt_extraction_failed(client, mocker):
 
 
 @pytest.mark.failure_mode
-def test_missing_authentication_token(client, mocker):
+async def test_missing_authentication_token(client: AsyncClient, mocker) -> None:
     mocker.patch("ai_ticket.server.on_event").return_value = CompletionResponse(completion="ok")
     server.TOKEN_MANAGER.update_tokens({"secret-token"})
 
-    response = client.post("/event", json={"content": {"prompt": "needs auth"}})
+    response = await client.post("/event", json={"content": {"prompt": "needs auth"}})
 
     assert response.status_code == 401
     data = response.json()
@@ -116,27 +131,27 @@ def test_missing_authentication_token(client, mocker):
 
 
 @pytest.mark.failure_mode
-def test_invalid_bearer_token_rejected(client, mocker):
+async def test_invalid_bearer_token_rejected(client: AsyncClient, mocker) -> None:
     mocker.patch("ai_ticket.server.on_event").return_value = CompletionResponse(completion="ok")
     server.TOKEN_MANAGER.update_tokens({"secret-token"})
 
-    response = client.post(
+    response = await client.post(
         "/event",
         json={"content": {"prompt": "authorised"}},
         headers={"Authorization": "Bearer totally-wrong"},
     )
 
     assert response.status_code == 403
-    data = json.loads(response.data)
+    data = response.json()
     assert data["error"] == "forbidden"
     assert "Invalid authentication token" in data["details"]
 
 
-def test_valid_bearer_token_allows_request(client, mocker):
+async def test_valid_bearer_token_allows_request(client: AsyncClient, mocker) -> None:
     mocker.patch("ai_ticket.server.on_event").return_value = CompletionResponse(completion="secure")
     server.TOKEN_MANAGER.update_tokens({"secret-token"})
 
-    response = client.post(
+    response = await client.post(
         "/event",
         json={"content": {"prompt": "authorised"}},
         headers={"Authorization": "Bearer secret-token"},
@@ -146,36 +161,34 @@ def test_valid_bearer_token_allows_request(client, mocker):
     assert response.json()["completion"] == "secure"
 
 
-@pytest.mark.anyio("asyncio")
-async def test_metrics_endpoint_available() -> None:
-    async with _make_client() as client:
-        response = await client.get("/metrics")
+async def test_metrics_endpoint_available(client: AsyncClient) -> None:
+    response = await client.get("/metrics")
 
     assert response.status_code == 200
     assert response.headers["content-type"] == CONTENT_TYPE_LATEST
 
 
 @pytest.mark.failure_mode
-def test_rate_limiter_blocks_when_threshold_exceeded(client, mocker):
+async def test_rate_limiter_blocks_when_threshold_exceeded(client: AsyncClient, mocker) -> None:
     mocker.patch("ai_ticket.server.on_event").return_value = CompletionResponse(completion="ok")
     original = server.RATE_LIMITER
     server.RATE_LIMITER = InMemoryRateLimiter(limit=1, window_seconds=60)
 
     try:
-        first = client.post(
+        first = await client.post(
             "/event",
             json={"content": {"prompt": "first"}},
             headers={"X-Forwarded-For": "1.1.1.1"},
         )
         assert first.status_code == 200
 
-        second = client.post(
+        second = await client.post(
             "/event",
             json={"content": {"prompt": "second"}},
             headers={"X-Forwarded-For": "1.1.1.1"},
         )
         assert second.status_code == 429
-        data = json.loads(second.data)
+        data = second.json()
         assert data["error"] == "rate_limited"
         retry_after = second.headers.get("Retry-After")
         assert retry_after is not None
@@ -184,47 +197,44 @@ def test_rate_limiter_blocks_when_threshold_exceeded(client, mocker):
         server.RATE_LIMITER = original
 
 
-def test_metrics_stream_emits_updates(client, monkeypatch):
+async def test_metrics_stream_emits_updates(monkeypatch: pytest.MonkeyPatch) -> None:
     fresh_store = MetricsStore()
     monkeypatch.setattr(server, "metrics_store", fresh_store)
 
-    response = client.get("/api/metrics/stream")
-    stream = iter(response.response)
-    first_chunk = next(stream).decode()
+    stream = server._metrics_event_stream()
+    first_chunk = await stream.__anext__()
     assert first_chunk.startswith("data: ")
-
-    fresh_store.record_event(latency_s=0.05, success=True)
-    second_chunk = next(stream).decode()
-    assert '"successes": 1' in second_chunk
-    response.close()
-
-
-@pytest.mark.failure_mode
-def test_metrics_stream_reconnects_after_client_drop(client, monkeypatch):
-    fresh_store = MetricsStore()
-    monkeypatch.setattr(server, "metrics_store", fresh_store)
-
-    first_response = client.get("/api/metrics/stream")
-    first_stream = iter(first_response.response)
-    next(first_stream)
     assert len(fresh_store._subscribers) == 1
 
-    first_response.close()
+    fresh_store.record_event(latency_s=0.05, success=True)
+    second_chunk = await stream.__anext__()
+    assert '"successes": 1' in second_chunk
 
-    def _wait_for_unsubscribe(timeout: float = 0.5) -> bool:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+    await stream.aclose()
+
+@pytest.mark.failure_mode
+async def test_metrics_stream_reconnects_after_client_drop(monkeypatch: pytest.MonkeyPatch) -> None:
+    fresh_store = MetricsStore()
+    monkeypatch.setattr(server, "metrics_store", fresh_store)
+
+    first_stream = server._metrics_event_stream()
+    await first_stream.__anext__()
+    assert len(fresh_store._subscribers) == 1
+
+    await first_stream.aclose()
+
+    async def _wait_for_unsubscribe(timeout: float = 0.5) -> bool:
+        deadline = anyio.current_time() + timeout
+        while anyio.current_time() < deadline:
             if not fresh_store._subscribers:
                 return True
-            time.sleep(0.01)
+            await anyio.sleep(0.01)
         return not fresh_store._subscribers
 
-    assert _wait_for_unsubscribe()
+    assert await _wait_for_unsubscribe()
 
-    second_response = client.get("/api/metrics/stream")
-    second_stream = iter(second_response.response)
-    initial_chunk = next(second_stream).decode()
-    assert initial_chunk.startswith("data: ")
+    second_stream = server._metrics_event_stream()
+    await second_stream.__anext__()
 
     fresh_store.record_event(
         latency_s=0.02,
@@ -232,8 +242,9 @@ def test_metrics_stream_reconnects_after_client_drop(client, monkeypatch):
         error_code="rate_limited",
         message="burst",
     )
-    follow_up = next(second_stream).decode()
+    follow_up = await second_stream.__anext__()
     assert '"rate_limited"' in follow_up
 
-    second_response.close()
-    assert _wait_for_unsubscribe()
+    await second_stream.aclose()
+
+    assert await _wait_for_unsubscribe()
