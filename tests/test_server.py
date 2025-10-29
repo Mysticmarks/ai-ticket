@@ -185,6 +185,7 @@ def test_diagnostics_simulate_endpoint(client):
     response = client.post(
         "/diagnostics/simulate",
         json={"event": {"content": {"prompt": "diagnostic"}}},
+        headers={"Authorization": "Bearer test-token"},
     )
 
     assert response.status_code == 200

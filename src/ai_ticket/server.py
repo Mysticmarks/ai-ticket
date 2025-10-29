@@ -259,7 +259,14 @@ if trust_proxy_count > 0:
         x_host=trust_proxy_count,
     )
 
-EXEMPT_ENDPOINTS = {"health_check", "metrics", "diagnostics_self_test", "diagnostics_simulate"}
+_allow_unauthenticated_diagnostics = (
+    os.environ.get("ALLOW_DIAGNOSTICS_WITHOUT_AUTH", "").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+
+EXEMPT_ENDPOINTS = {"health_check", "metrics"}
+if _allow_unauthenticated_diagnostics:
+    EXEMPT_ENDPOINTS.update({"diagnostics_self_test", "diagnostics_simulate"})
 
 
 @app.before_request
