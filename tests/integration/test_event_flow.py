@@ -4,12 +4,11 @@ import json
 from pathlib import Path
 
 import pytest
-
-from ai_ticket._compat import httpx
+import httpx
 
 from ai_ticket.backends.base import StreamEvent
 from ai_ticket.backends.kobold_client import KoboldCompletionResult
-from ai_ticket.server import app as flask_app
+from ai_ticket.server import app
 
 _DATA_DIR = Path(__file__).resolve().parents[1] / "data" / "events"
 
@@ -26,10 +25,8 @@ def _load_message_payload(index: int = 0) -> tuple[dict[str, object], str]:
 
 
 @pytest.fixture(scope="module")
-def httpx_client() -> httpx.Client:
-    transport = httpx.WSGITransport(app=flask_app)
-    with httpx.Client(transport=transport, base_url="http://testserver") as client:
-        yield client
+def asgi_transport() -> httpx.ASGITransport:
+    return httpx.ASGITransport(app=app)
 
 
 @pytest.fixture
@@ -42,8 +39,11 @@ def incident_event() -> tuple[dict[str, object], str]:
     return _load_message_payload(1)
 
 
-def test_event_flow_success(
-    httpx_client: httpx.Client, chat_completion_event: tuple[dict[str, object], str], mocker: pytest.MockFixture
+@pytest.mark.anyio("asyncio")
+async def test_event_flow_success(
+    asgi_transport: httpx.ASGITransport,
+    chat_completion_event: tuple[dict[str, object], str],
+    mocker: pytest.MockFixture,
 ) -> None:
     event_payload, expected_prompt = chat_completion_event
     backend_calls: list[str] = []
@@ -54,7 +54,8 @@ def test_event_flow_success(
 
     mocker.patch("ai_ticket.events.inference.get_kobold_completion", side_effect=_fake_backend)
 
-    response = httpx_client.post("/event", json=event_payload)
+    async with httpx.AsyncClient(transport=asgi_transport, base_url="http://testserver") as httpx_client:
+        response = await httpx_client.post("/event", json=event_payload)
 
     assert response.status_code == 200
     body = response.json()
@@ -62,8 +63,11 @@ def test_event_flow_success(
     assert backend_calls == [expected_prompt]
 
 
-def test_event_flow_backend_error(
-    httpx_client: httpx.Client, incident_event: tuple[dict[str, object], str], mocker: pytest.MockFixture
+@pytest.mark.anyio("asyncio")
+async def test_event_flow_backend_error(
+    asgi_transport: httpx.ASGITransport,
+    incident_event: tuple[dict[str, object], str],
+    mocker: pytest.MockFixture,
 ) -> None:
     event_payload, expected_prompt = incident_event
 
@@ -72,7 +76,8 @@ def test_event_flow_backend_error(
         return_value=KoboldCompletionResult(error="backend_failure", details="timeout"),
     )
 
-    response = httpx_client.post("/event", json=event_payload)
+    async with httpx.AsyncClient(transport=asgi_transport, base_url="http://testserver") as httpx_client:
+        response = await httpx_client.post("/event", json=event_payload)
 
     assert response.status_code == 502
     body = response.json()

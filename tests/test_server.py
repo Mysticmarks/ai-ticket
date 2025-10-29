@@ -13,9 +13,6 @@ from ai_ticket.security import InMemoryRateLimiter
 from ai_ticket.server import app as flask_app
 
 
-@pytest.fixture
-def app():
-    yield flask_app
 
 
 @pytest.fixture
@@ -24,10 +21,10 @@ def client(app):
 
 
 @pytest.fixture(autouse=True)
-def reset_auth_tokens():
-    original_tokens = server.TOKEN_MANAGER.tokens
+def reset_auth_tokens() -> Iterator[None]:
+    original_tokens = TOKEN_MANAGER.tokens
     yield
-    server.TOKEN_MANAGER.update_tokens(original_tokens)
+    TOKEN_MANAGER.update_tokens(original_tokens)
 
 
 def test_handle_event_success(client, mocker):
@@ -38,8 +35,7 @@ def test_handle_event_success(client, mocker):
     response = client.post("/event", json=payload)
 
     assert response.status_code == 200
-    response_data = json.loads(response.data)
-    assert response_data == {"completion": "Test completion"}
+    assert response.json() == {"completion": "Test completion"}
     mock_on_event.assert_called_once_with(payload)
 
 
@@ -56,15 +52,15 @@ def test_handle_event_missing_content(client, mocker):
     response = client.post("/event", json=payload)
 
     assert response.status_code == 400
-    response_data = json.loads(response.data)
-    assert response_data["error"] == "missing_content_field"
+    assert response.json()["error"] == "missing_content_field"
     mock_on_event.assert_called_once_with(payload)
 
 
 def test_handle_event_not_json(client, mocker):
     mock_on_event = mocker.patch("ai_ticket.server.on_event")
 
-    response = client.post("/event", data="not a json string", content_type="text/plain")
+    async with _make_client() as client:
+        response = await client.post("/event", data="not a json string", headers={"Content-Type": "text/plain"})
 
     assert response.status_code == 400
     response_data = json.loads(response.data)
@@ -86,8 +82,7 @@ def test_handle_event_on_event_error(client, mocker):
     response = client.post("/event", json=payload)
 
     assert response.status_code == 503
-    response_data = json.loads(response.data)
-    assert response_data["error"] == "api_connection_error"
+    assert response.json()["error"] == "api_connection_error"
     mock_on_event.assert_called_once_with(payload)
 
 
@@ -104,8 +99,7 @@ def test_handle_event_prompt_extraction_failed(client, mocker):
     response = client.post("/event", json=payload)
 
     assert response.status_code == 422
-    response_data = json.loads(response.data)
-    assert response_data["error"] == "prompt_extraction_failed"
+    assert response.json()["error"] == "prompt_extraction_failed"
     mock_on_event.assert_called_once_with(payload)
 
 
@@ -117,7 +111,7 @@ def test_missing_authentication_token(client, mocker):
     response = client.post("/event", json={"content": {"prompt": "needs auth"}})
 
     assert response.status_code == 401
-    data = json.loads(response.data)
+    data = response.json()
     assert data["error"] == "unauthorised"
 
 
@@ -149,15 +143,16 @@ def test_valid_bearer_token_allows_request(client, mocker):
     )
 
     assert response.status_code == 200
-    data = json.loads(response.data)
-    assert data["completion"] == "secure"
+    assert response.json()["completion"] == "secure"
 
 
-def test_metrics_endpoint_available(client):
-    response = client.get("/metrics")
+@pytest.mark.anyio("asyncio")
+async def test_metrics_endpoint_available() -> None:
+    async with _make_client() as client:
+        response = await client.get("/metrics")
 
     assert response.status_code == 200
-    assert response.content_type == CONTENT_TYPE_LATEST
+    assert response.headers["content-type"] == CONTENT_TYPE_LATEST
 
 
 @pytest.mark.failure_mode

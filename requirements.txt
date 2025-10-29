@@ -1,7 +1,7 @@
-Flask>=2.0
-gunicorn
 python-dotenv
 requests
 prometheus-client
 anyio>=3.7
 httpx>=0.24
+fastapi>=0.110
+uvicorn[standard]>=0.22

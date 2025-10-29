@@ -23,4 +23,4 @@ RUN pip install .
 
 EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 CMD curl -f http://localhost:5000/health || exit 1
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "src.ai_ticket.server:app"]
+CMD ["uvicorn", "ai_ticket.server:app", "--host", "0.0.0.0", "--port", "5000", "--workers", "4", "--limit-concurrency", "1000", "--backlog", "2048"]

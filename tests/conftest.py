@@ -29,3 +29,8 @@ def mocker() -> Iterator[_Mocker]:
         yield helper
     finally:
         helper.stop()
+
+
+@pytest.fixture(scope="session")
+def anyio_backend() -> str:
+    return "asyncio"
