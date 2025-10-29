@@ -1,18 +1,8 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo } from "https://esm.sh/react@18.2.0";
 
-type ShortcutConfig = Record<string, () => void>;
+const normalizeKey = (key) => key.toLowerCase();
 
-type ShortcutDescriptor = {
-  key: string;
-  shift: boolean;
-  alt: boolean;
-  ctrl: boolean;
-  meta: boolean;
-};
-
-const normalizeKey = (key: string) => key.toLowerCase();
-
-const parseShortcut = (combo: string): ShortcutDescriptor | null => {
+const parseShortcut = (combo) => {
   const tokens = combo
     .split("+")
     .map((token) => token.trim().toLowerCase())
@@ -22,7 +12,7 @@ const parseShortcut = (combo: string): ShortcutDescriptor | null => {
     return null;
   }
 
-  const descriptor: ShortcutDescriptor = {
+  const descriptor = {
     key: normalizeKey(tokens[tokens.length - 1]),
     shift: false,
     alt: false,
@@ -46,14 +36,14 @@ const parseShortcut = (combo: string): ShortcutDescriptor | null => {
   return descriptor;
 };
 
-const targetIsEditable = (target: EventTarget | null): boolean => {
+const targetIsEditable = (target) => {
   if (!(target instanceof HTMLElement)) {
     return false;
   }
   return target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT";
 };
 
-export const useKeyboardShortcuts = (config: ShortcutConfig) => {
+export const useKeyboardShortcuts = (config) => {
   const shortcuts = useMemo(() => {
     return Object.entries(config)
       .map(([combo, handler]) => {
@@ -61,9 +51,9 @@ export const useKeyboardShortcuts = (config: ShortcutConfig) => {
         if (!descriptor) {
           return null;
         }
-        return { descriptor, handler } as const;
+        return { descriptor, handler };
       })
-      .filter(Boolean) as Array<{ descriptor: ShortcutDescriptor; handler: () => void }>;
+      .filter(Boolean);
   }, [config]);
 
   useEffect(() => {
@@ -71,7 +61,7 @@ export const useKeyboardShortcuts = (config: ShortcutConfig) => {
       return;
     }
 
-    const handler = (event: KeyboardEvent) => {
+    const handler = (event) => {
       if (event.defaultPrevented || targetIsEditable(event.target)) {
         return;
       }

@@ -1,23 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { EMPTY_METRICS, type MetricsSnapshot } from "../types";
-
-type MetricsState = {
-  metrics: MetricsSnapshot;
-  refresh: () => Promise<void>;
-};
-
-type MetricsStreamOptions = {
-  paused?: boolean;
-};
+import { useCallback, useEffect, useRef, useState } from "https://esm.sh/react@18.2.0";
+import { EMPTY_METRICS } from "../types.js";
 
 const METRICS_ENDPOINT = "/api/metrics/summary";
 const STREAM_ENDPOINT = "/api/metrics/stream";
 
-export const useMetricsStream = ({ paused = false }: MetricsStreamOptions = {}): MetricsState => {
-  const [metrics, setMetrics] = useState<MetricsSnapshot>(EMPTY_METRICS);
-  const eventSourceRef = useRef<EventSource | null>(null);
-  const fallbackTimerRef = useRef<number | null>(null);
-  const reconnectTimerRef = useRef<number | null>(null);
+export const useMetricsStream = ({ paused = false } = {}) => {
+  const [metrics, setMetrics] = useState(EMPTY_METRICS);
+  const eventSourceRef = useRef(null);
+  const fallbackTimerRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
 
   const cleanupTimers = useCallback(() => {
     if (fallbackTimerRef.current !== null) {
@@ -35,7 +26,7 @@ export const useMetricsStream = ({ paused = false }: MetricsStreamOptions = {}):
     if (!response.ok) {
       throw new Error(`Failed to load metrics: ${response.statusText}`);
     }
-    const data = (await response.json()) as MetricsSnapshot;
+    const data = await response.json();
     setMetrics(data);
   }, []);
 
@@ -45,8 +36,10 @@ export const useMetricsStream = ({ paused = false }: MetricsStreamOptions = {}):
 
   useEffect(() => {
     if (paused) {
-      eventSourceRef.current?.close();
-      eventSourceRef.current = null;
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
       cleanupTimers();
       return;
     }
@@ -56,7 +49,7 @@ export const useMetricsStream = ({ paused = false }: MetricsStreamOptions = {}):
       eventSourceRef.current = source;
 
       source.onmessage = (event) => {
-        const data = JSON.parse(event.data) as MetricsSnapshot;
+        const data = JSON.parse(event.data);
         setMetrics(data);
         cleanupTimers();
       };
@@ -81,8 +74,10 @@ export const useMetricsStream = ({ paused = false }: MetricsStreamOptions = {}):
     connectStream();
 
     return () => {
-      eventSourceRef.current?.close();
-      eventSourceRef.current = null;
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
       cleanupTimers();
     };
   }, [cleanupTimers, fetchSnapshot, paused]);

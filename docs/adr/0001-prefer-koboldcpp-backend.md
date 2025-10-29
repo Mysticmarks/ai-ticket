@@ -24,3 +24,12 @@ AI Ticket will optimise for KoboldCPP and other OpenAI-compatible chat endpoints
 * Simplifies client code, test fixtures, and configuration.
 * Enables deeper resilience tooling (e.g., structured error codes) for a single backend surface.
 * Requires additional abstraction work before adding alternative providers; tracked on the project roadmap.
+
+## Follow-up work (current status)
+
+The accepted decision has been implemented as a single KoboldCPP integration. The following roadmap tasks remain
+outstanding before additional providers can join the rotation:
+
+1. Productionise the `BackendPipeline` abstractions with battle-tested adapters for at least one non-Kobold backend.
+2. Extend observability and error-contract coverage so new providers emit the same metrics and structured failures.
+3. Document configuration knobs and operational runbooks for multi-backend deployments once adapters exist.

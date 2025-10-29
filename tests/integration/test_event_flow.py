@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import httpx
 
+from ai_ticket.backends.base import StreamEvent
 from ai_ticket.backends.kobold_client import KoboldCompletionResult
 from ai_ticket.server import app
 
@@ -84,3 +85,39 @@ async def test_event_flow_backend_error(
     assert body["details"] == "timeout"
     assert body["message"] == "Failed to retrieve completion from backend."
     mock_backend.assert_called_once_with(prompt=expected_prompt)
+
+
+def test_event_stream_sse_success(
+    httpx_client: httpx.Client,
+    chat_completion_event: tuple[dict[str, object], str],
+    mocker: pytest.MockFixture,
+) -> None:
+    event_payload, expected_prompt = chat_completion_event
+    event_payload["stream"] = True
+
+    stream_events = [
+        StreamEvent(delta="chunk", done=False),
+        StreamEvent(delta="", done=True),
+    ]
+
+    async def _fake_stream(prompt: str, kobold_url: str | None = None):
+        assert prompt == expected_prompt
+        assert kobold_url is None
+        for event in stream_events:
+            yield event
+
+    mocker.patch(
+        "ai_ticket.server.async_stream_kobold_completion",
+        side_effect=_fake_stream,
+    )
+
+    with httpx_client.stream("POST", "/event", json=event_payload) as response:
+        assert response.status_code == 200
+        assert response.headers["Content-Type"].startswith("text/event-stream")
+        lines = list(response.iter_lines())
+
+    payloads = [json.loads(line.split("data: ", 1)[1]) for line in lines if line.startswith("data: ")]
+
+    assert payloads[0]["delta"] == "chunk"
+    assert payloads[-1]["done"] is True
+    assert payloads[-1].get("delta", "") == ""

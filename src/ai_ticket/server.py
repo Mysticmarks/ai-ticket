@@ -4,6 +4,14 @@ import anyio
 import json
 import logging
 import os
+import queue
+from dataclasses import asdict, is_dataclass
+from time import perf_counter
+from typing import Any, Mapping
+
+from flask import Flask, Response, abort, jsonify, request, send_from_directory, g
+from flask import stream_with_context
+import atexit
 import signal
 import threading
 import time
@@ -44,6 +52,18 @@ try:  # pragma: no cover - optional dependency path
     from prometheus_client import REGISTRY  # type: ignore
 except ImportError:  # pragma: no cover - exercised when prometheus is absent
     REGISTRY = None  # type: ignore[assignment]
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+from ai_ticket._compat import anyio
+from ai_ticket.backends.base import StreamEvent, StreamingNotSupported
+from ai_ticket.backends.kobold_client import async_stream_kobold_completion
+from ai_ticket.events.common import validate_inference_event
+from ai_ticket.events.inference import CompletionResponse, ErrorResponse, on_event
+from ai_ticket.events.prompt_extraction import PromptExtractionResult, extract_prompt
+from ai_ticket.events.validation import ValidationError
+from ai_ticket.observability import metrics_store
+from ai_ticket.ui import get_ui_dist_path
+from ai_ticket.security import TokenManager, InMemoryRateLimiter, SQLiteRateLimiter
 
 
 class JsonFormatter(logging.Formatter):
@@ -212,6 +232,155 @@ def _normalise_response(response: Any) -> dict[str, Any]:
     if isinstance(response, Mapping):
         return dict(response)
     return {"result": response}
+
+
+def _serialize_stream_event(event: StreamEvent) -> dict[str, Any]:
+    payload: dict[str, Any] = {"delta": event.delta, "done": event.done}
+    if event.metadata is not None:
+        payload["metadata"] = dict(event.metadata)
+    return payload
+
+
+def _streaming_error_response(error: ErrorResponse, *, start: float) -> Response:
+    duration = perf_counter() - start
+    metrics_store.record_event(
+        latency_s=duration,
+        success=False,
+        error_code=error.error,
+        message=error.message,
+    )
+
+    payload: dict[str, Any] = {"error": error.error, "message": error.message, "done": True}
+    if error.details is not None:
+        payload["details"] = error.details
+
+    def _event_stream() -> Any:
+        yield f"data: {json.dumps(payload)}\n\n"
+
+    return Response(
+        stream_with_context(_event_stream()),
+        mimetype="text/event-stream",
+        status=error.status_code,
+    )
+
+
+def _build_streaming_success_response(
+    prompt: str,
+    *,
+    start: float,
+    kobold_url: str | None = None,
+) -> Response:
+    queue_state: "queue.SimpleQueue[tuple[str, dict[str, Any] | None]]" = queue.SimpleQueue()
+    result_state: dict[str, Any] = {"success": False, "error": None}
+
+    logger.info(
+        "Starting streaming completion", extra={"prompt_preview": prompt[:80]}
+    )
+
+    def _worker() -> None:
+        async def _run() -> None:
+            success = False
+            try:
+                async for chunk in async_stream_kobold_completion(
+                    prompt=prompt,
+                    kobold_url=kobold_url,
+                ):
+                    queue_state.put(("data", _serialize_stream_event(chunk)))
+                success = True
+            except StreamingNotSupported as exc:
+                logger.warning(
+                    "Streaming not supported by backend", extra={"error": str(exc)}
+                )
+                result_state["error"] = ("streaming_not_supported", str(exc))
+                queue_state.put(
+                    (
+                        "data",
+                        {
+                            "error": "streaming_not_supported",
+                            "details": str(exc),
+                            "done": True,
+                        },
+                    )
+                )
+            except Exception as exc:  # pragma: no cover - defensive safeguard
+                logger.exception("Streaming backend failure", extra={"error": str(exc)})
+                result_state["error"] = ("streaming_error", str(exc))
+                queue_state.put(
+                    (
+                        "data",
+                        {
+                            "error": "streaming_error",
+                            "details": str(exc),
+                            "done": True,
+                        },
+                    )
+                )
+            finally:
+                result_state["success"] = success and result_state["error"] is None
+                queue_state.put(("end", None))
+
+        anyio.run(_run)
+
+    worker = threading.Thread(target=_worker, daemon=True)
+    worker.start()
+
+    def event_stream() -> Any:
+        try:
+            while True:
+                kind, payload = queue_state.get()
+                if kind == "data" and payload is not None:
+                    yield f"data: {json.dumps(payload)}\n\n"
+                elif kind == "end":
+                    break
+        finally:
+            worker.join()
+            duration = perf_counter() - start
+            if result_state.get("success"):
+                metrics_store.record_event(latency_s=duration, success=True)
+            else:
+                error_code, message = result_state.get("error") or (
+                    "streaming_error",
+                    "Streaming request failed.",
+                )
+                metrics_store.record_event(
+                    latency_s=duration,
+                    success=False,
+                    error_code=error_code,
+                    message=message,
+                )
+
+    return Response(
+        stream_with_context(event_stream()), mimetype="text/event-stream"
+    )
+
+
+def _handle_streaming_event(event_data: Mapping[str, Any], *, start: float) -> Response:
+    try:
+        content_key = validate_inference_event(event_data)
+        extraction: PromptExtractionResult = extract_prompt(event_data[content_key])
+    except ValidationError as error:
+        logger.warning(
+            "Streaming inference validation failed",
+            extra={
+                "error_code": error.code,
+                "status_code": error.status_code,
+                "details": error.details,
+            },
+        )
+        error_response = ErrorResponse(
+            error=error.code,
+            message=error.message,
+            status_code=error.status_code,
+            details=error.details,
+        )
+        return _streaming_error_response(error_response, start=start)
+
+    kobold_url = event_data.get("kobold_url") if isinstance(event_data, Mapping) else None
+    return _build_streaming_success_response(
+        extraction.prompt,
+        start=start,
+        kobold_url=str(kobold_url) if kobold_url else None,
+    )
 
 
 configure_logging()
@@ -409,6 +578,9 @@ async def handle_event(request: Request) -> JSONResponse:
     )
 
     start = perf_counter()
+
+    if bool(getattr(event_data, "get", lambda *_: False)("stream")):
+        return _handle_streaming_event(event_data, start=start)
 
     try:
         response = await anyio.to_thread.run_sync(on_event, event_data)

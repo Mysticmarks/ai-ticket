@@ -6,7 +6,12 @@ import pytest
 
 from ai_ticket._compat import anyio, httpx
 
-from ai_ticket.backends.kobold_client import KoboldCompletionResult, async_get_kobold_completion
+from ai_ticket.backends.base import StreamEvent
+from ai_ticket.backends.kobold_client import (
+    KoboldCompletionResult,
+    async_get_kobold_completion,
+    async_stream_kobold_completion,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -147,4 +152,35 @@ def test_async_get_kobold_completion_rate_limit(fake_async_client: tuple[dict[st
     assert result.is_success()
     assert result.completion == "second attempt"
     assert calls.count(chat_url) == 2
+
+
+def test_async_stream_kobold_completion_fallback(
+    fake_async_client: tuple[dict[str, list[Any]], list[str]]
+) -> None:
+    script, _ = fake_async_client
+    base_url = "http://kobold.local"
+    chat_url = f"{base_url}/v1/chat/completions"
+
+    script[chat_url] = [
+        _response(
+            chat_url,
+            payload={
+                "choices": [
+                    {"message": {"content": "streamed completion"}},
+                ]
+            },
+        )
+    ]
+
+    async def _collect() -> list[StreamEvent]:
+        events: list[StreamEvent] = []
+        async for chunk in async_stream_kobold_completion("Tell me a story", base_url):
+            events.append(chunk)
+        return events
+
+    events = anyio.run(_collect)
+
+    assert events
+    assert any(event.delta == "streamed completion" for event in events)
+    assert events[-1].done is True
 
