@@ -262,3 +262,100 @@ def test_astream_raises_when_all_backends_fail() -> None:
 
     assert first.astream_calls == 1
     assert second.astream_calls == 1
+
+
+def test_pipeline_respects_concurrency_limits() -> None:
+    class _ConcurrentBackend:
+        def __init__(self) -> None:
+            self.name = "concurrent"
+            self._lock = anyio.Lock()
+            self._active = 0
+            self.max_active = 0
+
+        async def acomplete(
+            self,
+            request: CompletionRequest,
+            *,
+            context: BackendContext | None = None,
+        ) -> CompletionResult:
+            del request, context
+            async with self._lock:
+                self._active += 1
+                self.max_active = max(self.max_active, self._active)
+            try:
+                await anyio.sleep(0.02)
+                return CompletionResult(completion="ok")
+            finally:
+                async with self._lock:
+                    self._active -= 1
+
+    backend = _ConcurrentBackend()
+    pipeline = BackendPipeline([
+        BackendSlotConfig(backend=backend, concurrency=2),
+    ])
+
+    async def _runner() -> None:
+        async def _invoke() -> None:
+            result = await pipeline.acomplete(CompletionRequest(prompt="stress"))
+            assert result.completion == "ok"
+
+        try:
+            async with anyio.create_task_group() as tg:
+                for _ in range(6):
+                    tg.start_soon(_invoke)
+        finally:
+            await pipeline.aclose()
+
+    anyio.run(_runner)
+
+    assert backend.max_active <= 2
+
+
+def test_pipeline_hedging_cancels_slower_attempts() -> None:
+    class _HedgedBackend:
+        def __init__(self) -> None:
+            self.name = "hedged"
+            self.calls = 0
+            self.cancelled = 0
+
+        async def acomplete(
+            self,
+            request: CompletionRequest,
+            *,
+            context: BackendContext | None = None,
+        ) -> CompletionResult:
+            del request, context
+            call_index = self.calls
+            self.calls += 1
+            if call_index == 0:
+                try:
+                    await anyio.sleep(0.2)
+                except BaseException as exc:  # pragma: no cover - cancellation path
+                    if isinstance(exc, anyio.get_cancelled_exc_class()):
+                        self.cancelled += 1
+                    raise
+                return CompletionResult(error="slow")
+
+            await anyio.sleep(0.01)
+            return CompletionResult(completion="fast")
+
+    backend = _HedgedBackend()
+    pipeline = BackendPipeline([
+        BackendSlotConfig(
+            backend=backend,
+            concurrency=2,
+            hedging=HedgedRequest(hedges=1, hedge_delay=0.01),
+        )
+    ])
+
+    async def _runner() -> CompletionResult:
+        try:
+            return await pipeline.acomplete(CompletionRequest(prompt="hedge"))
+        finally:
+            await pipeline.aclose()
+
+    result = anyio.run(_runner)
+
+    assert result.completion == "fast"
+    assert backend.calls >= 2
+    assert backend.cancelled >= 1

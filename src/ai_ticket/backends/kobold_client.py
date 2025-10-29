@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
+from collections.abc import AsyncIterator, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Final
 
@@ -15,6 +18,7 @@ from .base import (
     BackendContext,
     CompletionRequest,
     CompletionResult,
+    StreamEvent,
     StreamingNotSupported,
 )
 from .pipeline import BackendPipeline, BackendSlotConfig
@@ -53,6 +57,7 @@ def _chat_payload(request: CompletionRequest) -> dict[str, Any]:
         "max_tokens": request.max_tokens,
         "temperature": request.temperature,
         "top_p": request.top_p,
+        "stream": request.stream,
     }
 
 
@@ -73,6 +78,7 @@ def _completion_payload(request: CompletionRequest) -> dict[str, Any]:
         "max_tokens": request.max_tokens,
         "temperature": request.temperature,
         "top_p": request.top_p,
+        "stream": request.stream,
     }
 
 
@@ -161,8 +167,28 @@ class KoboldBackend(AsyncBackend):
         request: CompletionRequest,
         *,
         context: BackendContext | None = None,
-    ):
-        raise StreamingNotSupported("KoboldCPP backend does not support streaming yet.")
+    ) -> AsyncIterator[StreamEvent]:
+        """Stream completions using a graceful fallback when streaming is unavailable."""
+
+        result = await self.acomplete(
+            CompletionRequest(
+                prompt=request.prompt,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                stream=False,
+                metadata=request.metadata,
+            ),
+            context=context,
+        )
+
+        if not result.is_success():
+            raise StreamingNotSupported(result.details or "Streaming request failed.")
+
+        completion = result.completion or ""
+        if completion:
+            yield StreamEvent(delta=completion, done=False)
+        yield StreamEvent(delta="", done=True)
 
     def _resolve_client(
         self, context: BackendContext | None
@@ -338,6 +364,88 @@ def _build_default_pipeline(base_url: str) -> BackendPipeline:
     return BackendPipeline([slot])
 
 
+class _SemaphoreLock:
+    """Fallback lock implemented using :class:`anyio.Semaphore`."""
+
+    def __init__(self) -> None:
+        self._sem = anyio.Semaphore(1)
+
+    async def __aenter__(self) -> "_SemaphoreLock":
+        await self._sem.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self._sem.__aexit__(exc_type, exc, tb)
+
+
+def _create_lock() -> Any:
+    lock_factory = getattr(anyio, "Lock", None)
+    if lock_factory is not None:
+        return lock_factory()
+    return _SemaphoreLock()
+
+
+class _PipelineManager:
+    """Manage process-wide backend pipelines keyed by base URL."""
+
+    def __init__(self) -> None:
+        self._pipelines: dict[str, BackendPipeline] = {}
+        self._locks: dict[str, Any] = {}
+        self._registry_lock = _create_lock()
+
+    async def aget(self, base_url: str) -> BackendPipeline:
+        normalized = base_url.rstrip("/")
+
+        async with self._registry_lock:
+            pipeline = self._pipelines.get(normalized)
+            if pipeline is not None:
+                return pipeline
+            lock = self._locks.get(normalized)
+            if lock is None:
+                lock = _create_lock()
+                self._locks[normalized] = lock
+
+        async with lock:
+            pipeline = self._pipelines.get(normalized)
+            if pipeline is not None:
+                return pipeline
+            pipeline = _build_default_pipeline(normalized)
+            self._pipelines[normalized] = pipeline
+            return pipeline
+
+    async def aclose(self, base_url: str | None = None) -> None:
+        if base_url is not None:
+            normalized = base_url.rstrip("/")
+            pipeline = self._pipelines.pop(normalized, None)
+            self._locks.pop(normalized, None)
+            if pipeline is not None:
+                await pipeline.aclose()
+            return
+
+        pipelines: Sequence[BackendPipeline] = list(self._pipelines.values())
+        self._pipelines.clear()
+        self._locks.clear()
+        for pipeline in pipelines:
+            with suppress(Exception):
+                await pipeline.aclose()
+
+
+_PIPELINES = _PipelineManager()
+
+
+def _shutdown_pipelines() -> None:  # pragma: no cover - process shutdown hook
+    try:
+        anyio.run(_PIPELINES.aclose)
+    except RuntimeError:
+        # If the event loop is already closed or another shutdown is in
+        # progress we silently ignore the error to avoid masking the original
+        # exception.
+        pass
+
+
+atexit.register(_shutdown_pipelines)
+
+
 def get_kobold_completion(
     prompt: str,
     kobold_url: str | None = None,
@@ -351,14 +459,12 @@ def get_kobold_completion(
         max_tokens=max_length,
         temperature=temperature,
         top_p=top_p,
+        stream=False,
     )
 
     async def _runner() -> CompletionResult:
-        pipeline = _build_default_pipeline(base_url)
-        try:
-            return await pipeline.acomplete(request)
-        finally:
-            await pipeline.aclose()
+        pipeline = await _PIPELINES.aget(base_url)
+        return await pipeline.acomplete(request)
 
     return anyio.run(_runner)
 
@@ -376,12 +482,34 @@ async def async_get_kobold_completion(
         max_tokens=max_length,
         temperature=temperature,
         top_p=top_p,
+        stream=False,
     )
-    pipeline = _build_default_pipeline(base_url)
-    try:
-        return await pipeline.acomplete(request)
-    finally:
-        await pipeline.aclose()
+    pipeline = await _PIPELINES.aget(base_url)
+    return await pipeline.acomplete(request)
+
+
+async def async_stream_kobold_completion(
+    prompt: str,
+    kobold_url: str | None = None,
+    max_length: int = 150,
+    temperature: float = 0.7,
+    top_p: float = 1.0,
+) -> AsyncIterator[StreamEvent]:
+    base_url = (kobold_url or os.getenv("KOBOLDCPP_API_URL") or DEFAULT_KOBOLDCPP_API_URL).rstrip("/")
+    request = CompletionRequest(
+        prompt=prompt,
+        max_tokens=max_length,
+        temperature=temperature,
+        top_p=top_p,
+        stream=True,
+    )
+    pipeline = await _PIPELINES.aget(base_url)
+    async for chunk in pipeline.astream(request):
+        yield chunk
+
+
+async def aclose_all_kobold_pipelines() -> None:
+    await _PIPELINES.aclose()
 
 
 __all__ = [
@@ -389,5 +517,7 @@ __all__ = [
     "KoboldBackend",
     "get_kobold_completion",
     "async_get_kobold_completion",
+    "async_stream_kobold_completion",
+    "aclose_all_kobold_pipelines",
 ]
 
