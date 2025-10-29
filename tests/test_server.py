@@ -168,3 +168,34 @@ def test_metrics_stream_emits_updates(client, mocker):
     second_chunk = next(stream).decode()
     assert '"successes": 1' in second_chunk
     response.close()
+
+
+def test_diagnostics_self_test_endpoint(client):
+    response = client.get("/diagnostics/self-test")
+
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["status"] in {"ok", "warning"}
+    assert isinstance(data.get("checks"), list)
+
+
+def test_diagnostics_simulate_endpoint(client):
+    server.TOKEN_MANAGER.update_tokens({"test-token"})
+
+    response = client.post(
+        "/diagnostics/simulate",
+        json={"event": {"content": {"prompt": "diagnostic"}}},
+    )
+
+    assert response.status_code == 200
+    data = json.loads(response.data)
+    assert data["status"] in {"ok", "warning"}
+    assert any(step["name"] == "payload_validation" for step in data["steps"])
+
+
+def test_diagnostics_simulate_rejects_invalid_payload(client):
+    response = client.post("/diagnostics/simulate", json={"event": "invalid"})
+
+    assert response.status_code == 400
+    data = json.loads(response.data)
+    assert data["error"] == "invalid_event_payload"

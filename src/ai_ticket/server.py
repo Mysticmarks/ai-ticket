@@ -24,6 +24,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from ai_ticket.events.inference import CompletionResponse, ErrorResponse, on_event
 from ai_ticket.observability import metrics_store
+from ai_ticket.runtime.diagnostics import run_diagnostics, simulate_request_lifecycle
 from ai_ticket.ui import get_ui_dist_path
 from ai_ticket.security import TokenManager, InMemoryRateLimiter, SQLiteRateLimiter
 
@@ -258,7 +259,7 @@ if trust_proxy_count > 0:
         x_host=trust_proxy_count,
     )
 
-EXEMPT_ENDPOINTS = {"health_check", "metrics"}
+EXEMPT_ENDPOINTS = {"health_check", "metrics", "diagnostics_self_test", "diagnostics_simulate"}
 
 
 @app.before_request
@@ -402,6 +403,46 @@ def handle_event():
 @app.route("/health", methods=["GET"])
 def health_check():
     return jsonify({"status": "healthy", "shutdown_initiated": shutdown_event.is_set()}), 200
+
+
+@app.route("/diagnostics/self-test", methods=["GET"])
+def diagnostics_self_test():
+    report = run_diagnostics()
+    status_code = 200 if report.status != "error" else 503
+    return jsonify(report.to_dict()), status_code
+
+
+@app.route("/diagnostics/simulate", methods=["POST"])
+def diagnostics_simulate():
+    payload = request.get_json(silent=True) or {}
+    event_payload: Mapping[str, Any] | None = None
+
+    if isinstance(payload, Mapping):
+        raw_event = payload.get("event")
+        if raw_event is None:
+            event_payload = None
+        elif isinstance(raw_event, Mapping):
+            event_payload = raw_event
+        else:
+            return jsonify({
+                "status": "error",
+                "error": "invalid_event_payload",
+                "detail": "The 'event' field must be a mapping when provided.",
+            }), 400
+    else:
+        return jsonify({
+            "status": "error",
+            "error": "invalid_payload",
+            "detail": "Request body must be JSON.",
+        }), 400
+
+    simulation = simulate_request_lifecycle(
+        token_manager=TOKEN_MANAGER,
+        rate_limiter=RATE_LIMITER,
+        event_payload=event_payload,
+    )
+    status_code = 200 if simulation.status != "error" else 503
+    return jsonify(simulation.to_dict()), status_code
 
 
 @app.route("/metrics", methods=["GET"])

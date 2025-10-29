@@ -25,7 +25,8 @@ automation pipelines.
 * **Container-first delivery** – the project ships with a production-ready `Dockerfile`, Compose descriptors, and a Gunicorn
   entrypoint for reliable deployment.
 * **Operator-focused CLI** – the bundled `ai-ticket` command provides accent-themed terminal controls for starting the
-  server, issuing prompts, and running health diagnostics with structured feedback.
+  server, issuing prompts, running interactive setup wizards, and executing health or lifecycle diagnostics with structured
+  feedback.
 * **Observability via structured logging & metrics** – the Flask server emits JSON logs and exposes Prometheus-compatible
   counters, gauges, and histograms for health, error rates, and latency.
 * **Authentication & request throttling** – bearer-token authentication and per-client request quotas protect the `/event`
@@ -137,6 +138,15 @@ ai-ticket serve --workers 4 --threads 8
 
 # Launch the development server with Flask's auto-reloader
 ai-ticket serve --reload
+
+# Validate configuration and generate a .env file
+ai-ticket init --write-env
+
+# Run local and remote self-diagnostics before sending production traffic
+ai-ticket diagnostics --local
+
+# Explore quick actions without remembering flags
+ai-ticket palette
 ```
 
 Use `ai-ticket --help` or `ai-ticket <command> --help` to explore additional options such as sampling parameters,
@@ -160,6 +170,8 @@ worker classes, and theming controls.
 | `AI_TICKET_METRICS_DB`                   | _unset_                     | Optional SQLite file used to persist dashboard metrics. |
 | `AI_TICKET_METRICS_RETENTION_SECONDS`    | `900`                       | Retention window for dashboard metrics (seconds). |
 | `METRICS_NAMESPACE`                      | `ai_ticket`                 | Prometheus namespace prefix for exported metrics. |
+| `AI_TICKET_TLS_CERT_PATH`                | _unset_                     | TLS certificate path validated by the diagnostics suite and setup wizard. |
+| `AI_TICKET_TLS_KEY_PATH`                 | _unset_                     | TLS private key path validated by the diagnostics suite and setup wizard. |
 | `TRUST_PROXY_COUNT`                      | `0`                         | Number of reverse proxies to trust when deriving client IP addresses. |
 | `TLS_PORT`                               | `8443`                      | External TLS port exposed by the Compose TLS proxy. |
 | `WERKZEUG_LOG_LEVEL`                     | matches `LOG_LEVEL`         | Optional override for Werkzeug's access log level. |

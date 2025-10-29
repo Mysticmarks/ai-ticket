@@ -6,6 +6,7 @@ from unittest import mock
 import pytest
 
 from ai_ticket import cli
+from ai_ticket.runtime.diagnostics import DiagnosticCheck, DiagnosticsReport
 
 
 def _make_args(**overrides: object) -> argparse.Namespace:
@@ -74,5 +75,36 @@ def test_serve_command_reports_missing_gunicorn(mocker, cli_context) -> None:
     args = _make_args()
 
     result = cli._serve_command(args, cli_context)  # type: ignore[attr-defined]
+
+    assert result == 1
+
+
+def test_diagnostics_command_local_only(monkeypatch, cli_context) -> None:
+    report = DiagnosticsReport(
+        status="ok",
+        checks=[DiagnosticCheck(name="test", status="ok", detail="fine")],
+    )
+    monkeypatch.setattr(cli, "run_diagnostics", lambda overrides=None: report)
+    monkeypatch.setattr(cli, "_print_panel", lambda *args, **kwargs: None)
+
+    args = argparse.Namespace(server_url="http://localhost:5000", local=True, local_only=True)
+
+    result = cli._diagnostics_command(args, cli_context)  # type: ignore[attr-defined]
+
+    assert result == 0
+
+
+def test_diagnostics_command_remote_failure(monkeypatch, cli_context) -> None:
+    report = DiagnosticsReport(
+        status="warning",
+        checks=[DiagnosticCheck(name="auth", status="warning", detail="none")],
+    )
+    monkeypatch.setattr(cli, "_diagnostics_local", lambda ctx: report)
+    monkeypatch.setattr(cli, "_diagnostics_remote", lambda ctx, url: (1, "error"))
+    monkeypatch.setattr(cli, "_print_panel", lambda *args, **kwargs: None)
+
+    args = argparse.Namespace(server_url="http://localhost:5000", local=False, local_only=False)
+
+    result = cli._diagnostics_command(args, cli_context)  # type: ignore[attr-defined]
 
     assert result == 1

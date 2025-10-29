@@ -12,7 +12,10 @@ React and Vite under `src/ai_ticket/ui/` and ships with hue-adjustable theming, 
 - **Status panels** – quick insight into backend health, latency budgets, and pipeline throughput derived from recent event
   telemetry.
 - **Dark mode with accent control** – adjust the accent hue at runtime; the selection is persisted locally.
-- **Keyboard shortcuts** – `?` toggles help, `R` forces a metrics refresh, and `H` cycles accent hues.
+- **Keyboard shortcuts & overlays** – `Shift + /` toggles the shortcuts overlay, `Cmd/Ctrl + K` opens the command palette,
+  navigation combos (`G` then `H/P/C`) switch dashboard views, and `R`/`H` still refresh metrics and cycle accent hues.
+- **Command palette** – fuzzy-search quick actions (refresh, navigation, help) with `Cmd/Ctrl + K`, mirroring the keyboard
+  roadmap for operators who prefer not to reach for the mouse.
 
 ## Running the dashboard locally
 
@@ -52,8 +55,9 @@ Then open [http://localhost:5000/dashboard](http://localhost:5000/dashboard).
 
 ## Keyboard shortcuts & help overlay
 
-The help dialog lists available shortcuts and explains the dashboard layout. Press `?` to open the dialog, `Esc` or `Close`
-button to dismiss it. Shortcuts are ignored while typing in input fields.
+The help dialog lists available shortcuts and explains the dashboard layout. Press `Shift + /` to open the dialog, `Esc` or
+`Close` to dismiss it, and use `Cmd/Ctrl + K` to search the command palette. Shortcuts are ignored while typing in input
+fields.
 
 ## Docker workflow integration
 
