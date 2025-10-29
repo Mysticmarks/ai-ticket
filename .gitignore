@@ -12,6 +12,7 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+!src/ai_ticket/ui/dist/
 downloads/
 eggs/
 .eggs/
@@ -51,6 +52,7 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+tests/ui/__screenshots__/
 
 # Translations
 *.mo
