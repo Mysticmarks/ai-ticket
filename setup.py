@@ -11,12 +11,12 @@ setup(
     author_email='jmikedupont2@example.com',
     url='https://github.com/jmikedupont2/ai-ticket',
     install_requires=[
-        'Flask>=2.0',
         'anyio>=3.7',
-        'gunicorn',
         'httpx>=0.24',
+        'fastapi>=0.110',
         'python-dotenv',
         'requests',
+        'uvicorn[standard]>=0.22',
     ],
     entry_points={
         'console_scripts': ['ai-ticket=ai_ticket.cli:main'],
